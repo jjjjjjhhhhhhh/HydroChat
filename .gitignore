@@ -1,0 +1,150 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# ===========================================
+# ENVIRONMENT & CONFIGURATION FILES
+# ===========================================
+
+# Python Virtual Environments
+venv/
+env/
+.venv/
+.venv-win/
+WA_venv/
+
+# Environment files
+.env
+
+# ===========================================
+# LANGUAGE-SPECIFIC FILES
+# ===========================================
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Node.js dependencies
+node_modules/
+
+# TypeScript
+*.tsbuildinfo
+
+# ===========================================
+# FRAMEWORK-SPECIFIC FILES
+# ===========================================
+
+# Django
+db.sqlite3
+
+# Expo/React Native
+.expo/
+dist/
+web-build/
+.metro-health-check*
+
+# ===========================================
+# BUILD & DEBUG FILES
+# ===========================================
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Native builds
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# ===========================================
+# OPERATING SYSTEM FILES
+# ===========================================
+
+# macOS
+.DS_Store
+*.pem
+
+# ===========================================
+# IDE & EDITOR FILES
+# ===========================================
+
+# VS Code
+.vscode/
+
+# Cursor
+.cursor/
+
+# IntelliJ IDEA
+.idea/
+
+# Claude AI files
+.claude/
+
+# ===========================================
+# PROJECT-SPECIFIC FILES
+# ===========================================
+
+# Documentation files
+erd.dbml
+context.md
+Project directory.md
+GEMINI.md
+CLAUDE.md
+
+# Documentation & Media folders
+Documents/
+docs/
+MLIntegration/
+
+# Project backups
+backend/backup/
+backend/apps/scans/views_original_backup.py
+
+# Logs
+backend/logs
+
+# Github Codespaces
+.github
+
+# ===========================================
+# MEDIA & GENERATED FILES
+# ===========================================
+
+# Media files in any media folder
+**/media/**/*.jpg
+**/media/**/*.jpeg
+**/media/**/*.png
+**/media/**/*.json
+**/media/**/*.stl
+
+# Keep info.txt files in media folders
+!**/media/**/info.txt
+
+# ===========================================
+# TEST OUTPUT FILES
+# ===========================================
+
+# Test script outputs (keep info.txt files)
+backend/test/test_complete_flow/*
+!backend/test/test_complete_flow/info.txt
+
+backend/test/test_depth_no_mask/*
+!backend/test/test_depth_no_mask/info.txt
+
+backend/test/test_full_pipeline/*
+!backend/test/test_full_pipeline/info.txt
+
+backend/test/test_stl_generation/*
+!backend/test/test_stl_generation/info.txt
+
+backend/test/test image/*
+!backend/test/test image/info.txt
+
+# ===========================================
+# COMMENTED OUT (Keep for reference)
+# ===========================================
+
+# Don't ignore the cleanup scripts
+# backend/clean_media.py
