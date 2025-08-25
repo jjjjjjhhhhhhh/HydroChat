@@ -166,6 +166,7 @@ class TestPatientTools:
         # Mock API error response
         mock_response = MagicMock()
         mock_response.status_code = 400
+        mock_response.json.return_value = {"nric": ["Invalid NRIC format"]}  # Proper validation error format
         mock_http_client.request.return_value = mock_response
         
         # Call tool
@@ -177,7 +178,7 @@ class TestPatientTools:
         
         # Verify result
         assert result.success is False
-        assert 'Failed to create patient: 400' in result.error
+        assert 'nric: Invalid NRIC format' in result.error  # Phase 8: Enhanced validation error parsing
 
     def test_tool_list_patients_success(self, patient_tools, mock_http_client):
         """Test successful patient listing."""

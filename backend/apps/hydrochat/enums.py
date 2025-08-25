@@ -8,6 +8,7 @@ class Intent(Enum):
     LIST_PATIENTS = auto()
     GET_PATIENT_DETAILS = auto()
     GET_SCAN_RESULTS = auto()
+    CANCEL = auto()           # Phase 8: Cancellation command handling
     UNKNOWN = auto()
 
 class PendingAction(Enum):

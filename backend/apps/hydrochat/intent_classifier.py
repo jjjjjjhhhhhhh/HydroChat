@@ -13,6 +13,7 @@ _INTENT_PATTERNS = {
     Intent.LIST_PATIENTS: re.compile(r'(list|show|all)\s+patients', re.IGNORECASE),
     Intent.GET_SCAN_RESULTS: re.compile(r'(show|list|get).*(scan|result)', re.IGNORECASE),
     Intent.GET_PATIENT_DETAILS: re.compile(r'(show|get).*(patient)', re.IGNORECASE),
+    Intent.CANCEL: re.compile(r'\b(cancel|abort|stop|quit|exit|reset)\b', re.IGNORECASE),  # Phase 8: Cancellation detection
 }
 
 # Field extraction patterns

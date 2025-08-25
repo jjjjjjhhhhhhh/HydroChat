@@ -123,8 +123,8 @@ class TestGetPatientDetailsNode:
         
         # Verify results
         assert result["tool_result"].success is False
-        assert "Failed to get patient details" in result["agent_response"]
-        assert "Would you like to see a list" in result["agent_response"]
+        assert "Patient not found" in result["agent_response"]  # Updated for Phase 8 enhanced error handling
+        assert "list patients" in result["agent_response"]
         assert result["should_end"] is False
 
     def test_get_patient_details_handles_list_response(self, nodes, base_state):

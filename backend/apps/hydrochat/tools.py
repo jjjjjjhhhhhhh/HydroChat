@@ -4,7 +4,7 @@
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -72,6 +72,10 @@ class ToolResponse(BaseModel):
     data: Optional[Union[Dict, List]] = None  # Allow both Dict and List
     error: Optional[str] = None
     nric_masked: bool = Field(default=False, description="Whether NRIC was masked in logs")
+    # Phase 8: Enhanced error handling
+    status_code: Optional[int] = Field(default=None, description="HTTP status code from backend")
+    validation_errors: Optional[Dict[str, List[str]]] = Field(default=None, description="Field-specific validation errors from 400 responses")
+    retryable: bool = Field(default=False, description="Whether operation can be safely retried")
 
 
 # ===== TOOL FUNCTIONS =====
@@ -81,6 +85,47 @@ class PatientTools:
     
     def __init__(self, http_client: HttpClient):
         self.http_client = http_client
+
+    def _parse_400_validation_error(self, response) -> Dict[str, Any]:
+        """
+        Parse 400 validation error response from Django REST Framework.
+        
+        Args:
+            response: HTTP response object with 400 status code
+            
+        Returns:
+            Dict with 'summary' (user-friendly message) and 'field_errors' (field-specific issues)
+        """
+        try:
+            error_data = response.json()
+            field_errors = {}
+            error_messages = []
+            
+            if isinstance(error_data, dict):
+                for field_name, field_issues in error_data.items():
+                    if isinstance(field_issues, list):
+                        field_errors[field_name] = field_issues
+                        error_messages.append(f"{field_name}: {', '.join(field_issues)}")
+                    else:
+                        field_errors[field_name] = [str(field_issues)]
+                        error_messages.append(f"{field_name}: {field_issues}")
+            else:
+                # Fallback for non-dict error responses
+                error_messages.append(str(error_data))
+                
+            summary = '; '.join(error_messages) if error_messages else "Validation error"
+            
+            return {
+                'summary': summary,
+                'field_errors': field_errors
+            }
+            
+        except Exception as e:
+            logger.warning(f"[Tools] Failed to parse 400 error response: {e}")
+            return {
+                'summary': "Validation error (unable to parse details)",
+                'field_errors': {}
+            }
 
     def tool_create_patient(self, **kwargs) -> ToolResponse:
         """
@@ -109,10 +154,20 @@ class PatientTools:
                 patient_data = response.json()
                 logger.info(f"[Tools] ✅ Patient created successfully - ID: {patient_data.get('id')}")
                 return ToolResponse(success=True, data=patient_data, nric_masked=True)
+            elif response.status_code == 400:
+                # Parse validation errors and extract field-specific issues
+                error_detail = self._parse_400_validation_error(response)
+                logger.error(f"[Tools] ❌ Validation error creating patient: {error_detail['summary']}")
+                return ToolResponse(
+                    success=False, 
+                    error=error_detail['summary'],
+                    validation_errors=error_detail['field_errors'],
+                    status_code=400
+                )
             else:
                 error_msg = f"Failed to create patient: {response.status_code}"
                 logger.error(f"[Tools] ❌ {error_msg}")
-                return ToolResponse(success=False, error=error_msg)
+                return ToolResponse(success=False, error=error_msg, status_code=response.status_code)
                 
         except ValidationError as e:
             error_msg = f"Validation error: {e}"
@@ -244,14 +299,24 @@ class PatientTools:
                 patient_data = response.json()
                 logger.info(f"[Tools] ✅ Patient updated successfully - ID: {patient_id}")
                 return ToolResponse(success=True, data=patient_data, nric_masked=True)
+            elif response.status_code == 400:
+                # Parse validation errors and extract field-specific issues
+                error_detail = self._parse_400_validation_error(response)
+                logger.error(f"[Tools] ❌ Validation error updating patient: {error_detail['summary']}")
+                return ToolResponse(
+                    success=False, 
+                    error=error_detail['summary'],
+                    validation_errors=error_detail['field_errors'],
+                    status_code=400
+                )
             elif response.status_code == 404:
                 error_msg = f"Patient with ID {patient_id} not found"
                 logger.warning(f"[Tools] ⚠️ {error_msg}")
-                return ToolResponse(success=False, error=error_msg)
+                return ToolResponse(success=False, error=error_msg, status_code=404)
             else:
                 error_msg = f"Failed to update patient: {response.status_code}"
                 logger.error(f"[Tools] ❌ {error_msg}")
-                return ToolResponse(success=False, error=error_msg)
+                return ToolResponse(success=False, error=error_msg, status_code=response.status_code)
                 
         except ValidationError as e:
             error_msg = f"Validation error: {e}"
@@ -281,8 +346,14 @@ class PatientTools:
                 return patient_response
                 
             patient_data = patient_response.data or {}
-            patient_name = f"{patient_data.get('first_name', 'Unknown')} {patient_data.get('last_name', 'Unknown')}"
-            masked_nric = mask_nric(patient_data.get('nric', ''))
+            # Handle both dict and potential list responses safely
+            if isinstance(patient_data, dict):
+                patient_name = f"{patient_data.get('first_name', 'Unknown')} {patient_data.get('last_name', 'Unknown')}"
+                masked_nric = mask_nric(patient_data.get('nric', ''))
+            else:
+                # Fallback for unexpected data format
+                patient_name = f"Patient ID {patient_id}"
+                masked_nric = "***UNKNOWN***"
             
             # Call REST API
             response = self.http_client.request('DELETE', f'/api/patients/{patient_id}/')

@@ -118,6 +118,26 @@ class ConversationGraphNodes:
         is_complete, missing_fields_set = validate_required_patient_fields(conv_state.validated_fields)
         
         if not is_complete:
+            # Phase 8: Clarification loop count guard - prevent infinite loops
+            if conv_state.clarification_loop_count >= 1:
+                logger.warning(f"[{LogCategory.ERROR}] ⚠️ Clarification loop limit reached, offering cancellation")
+                response = f"""❌ I've asked for missing information before but still need:
+{', '.join(sorted(missing_fields_set))}
+
+This seems to be taking too long. You can:
+• Provide the missing information: {', '.join(sorted(missing_fields_set))}
+• Say "cancel" to start over
+
+How would you like to proceed?"""
+                
+                return {
+                    **state,
+                    "agent_response": response,
+                    "conversation_state": conv_state,
+                    "next_node": "end",
+                    "should_end": False
+                }
+            
             # Missing fields - request them from user
             conv_state.pending_fields = missing_fields_set
             conv_state.clarification_loop_count += 1
@@ -217,14 +237,47 @@ class ConversationGraphNodes:
                 # Tool execution failed
                 logger.error(f"[{LogCategory.ERROR}] ❌ Patient creation failed: {tool_result.error}")
                 
-                return {
-                    **state,
-                    "agent_response": f"❌ Failed to create patient: {tool_result.error}",
-                    "tool_result": tool_result,
-                    "conversation_state": conv_state,
-                    "next_node": "end",
-                    "should_end": False
-                }
+                # Phase 8: Handle 400 validation errors specially
+                if hasattr(tool_result, 'status_code') and tool_result.status_code == 400 and hasattr(tool_result, 'validation_errors'):
+                    validation_errors = tool_result.validation_errors or {}
+                    logger.info(f"[{LogCategory.ERROR}] 🔄 Repopulating pending fields from validation errors: {list(validation_errors.keys())}")
+                    
+                    # Repopulate pending_fields from validation errors
+                    conv_state.pending_fields = set(validation_errors.keys())
+                    
+                    # Generate field-specific error message
+                    field_messages = []
+                    for field, errors in validation_errors.items():
+                        if isinstance(errors, list):
+                            field_messages.append(f"• {field}: {', '.join(errors)}")
+                        else:
+                            field_messages.append(f"• {field}: {errors}")
+                    
+                    response = f"""❌ Please correct the following issues:
+
+{chr(10).join(field_messages)}
+
+Please provide the corrected information."""
+                    
+                    # Route back to create_patient node for field collection
+                    return {
+                        **state,
+                        "agent_response": response,
+                        "tool_result": tool_result,
+                        "conversation_state": conv_state,
+                        "next_node": "create_patient",  # Route back for field correction
+                        "should_end": False
+                    }
+                else:
+                    # Generic error handling for non-validation failures
+                    return {
+                        **state,
+                        "agent_response": f"❌ Failed to create patient: {tool_result.error}",
+                        "tool_result": tool_result,
+                        "conversation_state": conv_state,
+                        "next_node": "end",
+                        "should_end": False
+                    }
                 
         except Exception as e:
             logger.error(f"[{LogCategory.ERROR}] ❌ Unexpected error during patient creation: {e}")
@@ -386,9 +439,19 @@ class ConversationGraphNodes:
                 # Tool execution failed
                 logger.error(f"[{LogCategory.ERROR}] ❌ Failed to get patient details: {tool_result.error}")
                 
-                response = f"❌ Failed to get patient details: {tool_result.error}"
-                if "404" in str(tool_result.error) or "not found" in str(tool_result.error).lower():
-                    response += "\n\nWould you like to see a list of all patients?"
+                # Phase 8: Enhanced 404 handling offering list option
+                if (hasattr(tool_result, 'status_code') and tool_result.status_code == 404) or \
+                   "404" in str(tool_result.error) or "not found" in str(tool_result.error).lower():
+                    response = f"""❌ Patient not found: {tool_result.error}
+
+💡 **Helpful options:**
+• Say "list patients" to see all available patients
+• Provide a different patient ID to look up
+• Say "cancel" to start over
+
+How would you like to proceed?"""
+                else:
+                    response = f"❌ Failed to get patient details: {tool_result.error}"
                 
                 return {
                     **state,
@@ -538,19 +601,55 @@ class ConversationGraphNodes:
                 # Tool execution failed
                 logger.error(f"[{LogCategory.ERROR}] ❌ Patient update failed: {tool_result.error}")
                 
-                # Reset conversation state on failure
-                conv_state.pending_action = PendingAction.NONE
-                conv_state.validated_fields.clear()
-                conv_state.pending_fields.clear()
-                
-                return {
-                    **state,
-                    "agent_response": f"❌ Failed to update patient: {tool_result.error}",
-                    "tool_result": tool_result,
-                    "conversation_state": conv_state,
-                    "next_node": "end",
-                    "should_end": False
-                }
+                # Phase 8: Handle 400 validation errors specially  
+                if hasattr(tool_result, 'status_code') and tool_result.status_code == 400 and hasattr(tool_result, 'validation_errors'):
+                    validation_errors = tool_result.validation_errors or {}
+                    logger.info(f"[{LogCategory.ERROR}] 🔄 Repopulating pending fields from validation errors: {list(validation_errors.keys())}")
+                    
+                    # Keep patient ID but repopulate pending_fields for corrections
+                    conv_state.pending_fields = set(validation_errors.keys())
+                    # Clear invalid fields from validated_fields but keep patient ID
+                    for field in validation_errors.keys():
+                        conv_state.validated_fields.pop(field, None)
+                    
+                    # Generate field-specific error message
+                    field_messages = []
+                    for field, errors in validation_errors.items():
+                        if isinstance(errors, list):
+                            field_messages.append(f"• {field}: {', '.join(errors)}")
+                        else:
+                            field_messages.append(f"• {field}: {errors}")
+                    
+                    response = f"""❌ Please correct the following issues for patient {patient_id}:
+
+{chr(10).join(field_messages)}
+
+Please provide the corrected information."""
+                    
+                    # Route back to update_patient node for field collection
+                    return {
+                        **state,
+                        "agent_response": response,
+                        "tool_result": tool_result,
+                        "conversation_state": conv_state,
+                        "next_node": "update_patient",  # Route back for field correction
+                        "should_end": False
+                    }
+                else:
+                    # Generic error handling for non-validation failures
+                    # Reset conversation state on failure
+                    conv_state.pending_action = PendingAction.NONE
+                    conv_state.validated_fields.clear()
+                    conv_state.pending_fields.clear()
+                    
+                    return {
+                        **state,
+                        "agent_response": f"❌ Failed to update patient: {tool_result.error}",
+                        "tool_result": tool_result,
+                        "conversation_state": conv_state,
+                        "next_node": "end",
+                        "should_end": False
+                    }
                 
         except Exception as e:
             logger.error(f"[{LogCategory.ERROR}] ❌ Unexpected error during patient update: {e}")
@@ -814,9 +913,19 @@ class ConversationGraphNodes:
                 # Reset state
                 conv_state.pending_action = PendingAction.NONE
                 
-                response = f"❌ Failed to get scan results: {tool_result.error}"
-                if "404" in str(tool_result.error) or "not found" in str(tool_result.error).lower():
-                    response += f"\n\nPatient ID {patient_id} may not exist. Would you like to see a list of all patients?"
+                # Phase 8: Enhanced 404 handling offering list option
+                if (hasattr(tool_result, 'status_code') and tool_result.status_code == 404) or \
+                   "404" in str(tool_result.error) or "not found" in str(tool_result.error).lower():
+                    response = f"""❌ Patient ID {patient_id} not found: {tool_result.error}
+
+💡 **Helpful options:**
+• Say "list patients" to see all available patients  
+• Provide a different patient ID for scan results
+• Say "cancel" to start over
+
+How would you like to proceed?"""
+                else:
+                    response = f"❌ Failed to get scan results: {tool_result.error}"
                 
                 return {
                     **state,
@@ -1049,6 +1158,47 @@ Please let me know how I can assist you with patient management."""
             "should_end": False
         }
 
+    def handle_cancellation_node(self, state: GraphState) -> GraphState:
+        """
+        Node 15: Handle user cancellation/reset commands.
+        Phase 8: Cancellation command handling.
+        """
+        conv_state = state["conversation_state"]
+        user_message = state["user_message"]
+        
+        logger.info(f"[{LogCategory.INTENT}] 🛑 Handling cancellation request")
+        
+        # Check if there was an active workflow to cancel
+        had_active_workflow = (
+            conv_state.pending_action != PendingAction.NONE or
+            conv_state.confirmation_required or
+            len(conv_state.pending_fields) > 0 or
+            conv_state.clarification_loop_count > 0
+        )
+        
+        # Reset conversation state
+        conv_state.reset_for_cancellation()
+        
+        # Generate appropriate response
+        if had_active_workflow:
+            response = "✅ Current operation cancelled. Your conversation has been reset. How can I help you with patient management?"
+            logger.info(f"[{LogCategory.SUCCESS}] ✅ Active workflow cancelled and state reset")
+        else:
+            response = "ℹ️ No active operation to cancel. How can I help you with patient management?"
+            logger.info(f"[{LogCategory.INTENT}] ℹ️ No active workflow found to cancel")
+        
+        # Increment metrics for cancelled operations
+        if had_active_workflow:
+            conv_state.metrics['aborted_ops'] += 1
+        
+        return {
+            **state,
+            "agent_response": response,
+            "conversation_state": conv_state,
+            "next_node": "end",
+            "should_end": False
+        }
+
     def _determine_next_node_from_intent(self, intent: Intent) -> str:
         """Determine the next node based on classified intent."""
         intent_routing = {
@@ -1058,6 +1208,7 @@ Please let me know how I can assist you with patient management."""
             Intent.LIST_PATIENTS: "list_patients",
             Intent.GET_PATIENT_DETAILS: "get_patient_details",
             Intent.GET_SCAN_RESULTS: "get_scan_results",
+            Intent.CANCEL: "handle_cancellation",  # Phase 8: Cancellation handling
             Intent.UNKNOWN: "unknown_intent"
         }
         
@@ -1109,6 +1260,7 @@ class ConversationGraph:
         workflow.add_node("provide_stl_links", self.nodes.provide_stl_links_node)
         workflow.add_node("handle_confirmation", self.nodes.handle_confirmation_node)
         workflow.add_node("unknown_intent", self.nodes.unknown_intent_node)
+        workflow.add_node("handle_cancellation", self.nodes.handle_cancellation_node)  # Phase 8: Cancellation handler
         
         # Set entry point - check for pending confirmations first
         workflow.set_entry_point("classify_intent")
