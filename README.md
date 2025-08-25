@@ -149,7 +149,6 @@ python -m venv .venv-win
 .venv-win/Scripts/activate
 
 # Install backend dependencies
-cd backend
 pip install -r requirements.txt
 ```
 

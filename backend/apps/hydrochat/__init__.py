@@ -1,0 +1,1 @@
+# HydroChat app package initialization

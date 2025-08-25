@@ -92,10 +92,9 @@ context.md
 Project directory.md
 GEMINI.md
 CLAUDE.md
-
 # Documentation & Media folders
 Documents/
-docs/
+# docs/
 MLIntegration/
 
 # Project backups

@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+import os
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,7 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-2f-6-8%d$+z=z9c04-=eih&!3&3lhqbw-g%s+p=0+t6c0l-st('
+# Load from environment. Provide an obviously unsafe fallback only when DEBUG truthy.
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    debug_env = os.getenv('DEBUG', 'True').lower() in {'1', 'true', 'yes'}
+    if debug_env:
+        SECRET_KEY = 'dev-insecure-placeholder-key'
+    else:
+        raise ImproperlyConfigured('DJANGO_SECRET_KEY environment variable is required when DEBUG is False.')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -44,6 +53,7 @@ INSTALLED_APPS = [
     'apps.patients', 
     'apps.scans',
     'apps.ai_processing',  # Added for ZoeDepth functionality
+    'apps.hydrochat',  # HydroChat conversational assistant (Phase 0 scaffold)
     'coreViews',  # Legacy app - will be removed after migration
 ]
 
