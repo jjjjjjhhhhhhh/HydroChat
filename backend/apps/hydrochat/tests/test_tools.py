@@ -431,8 +431,10 @@ class TestToolManager:
         mock_http_client.request.return_value = mock_response
         
         # Execute tool
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
         result = tool_manager.execute_tool(
             Intent.CREATE_PATIENT,
+            state_metrics,
             first_name='John',
             last_name='Doe',
             nric='S1234567A'
@@ -451,7 +453,8 @@ class TestToolManager:
         mock_http_client.request.return_value = mock_response
         
         # Execute tool
-        result = tool_manager.execute_tool(Intent.LIST_PATIENTS)
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
+        result = tool_manager.execute_tool(Intent.LIST_PATIENTS, state_metrics)
         
         # Verify result
         assert result.success is True
@@ -466,7 +469,8 @@ class TestToolManager:
         mock_http_client.request.return_value = mock_response
         
         # Execute tool
-        result = tool_manager.execute_tool(Intent.GET_PATIENT_DETAILS, patient_id=1)
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
+        result = tool_manager.execute_tool(Intent.GET_PATIENT_DETAILS, state_metrics, patient_id=1)
         
         # Verify result
         assert result.success is True
@@ -497,8 +501,10 @@ class TestToolManager:
         mock_http_client.request.side_effect = [get_response, update_response]
         
         # Execute tool
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
         result = tool_manager.execute_tool(
             Intent.UPDATE_PATIENT,
+            state_metrics,
             patient_id=1,
             last_name='Smith'
         )
@@ -526,7 +532,8 @@ class TestToolManager:
         mock_http_client.request.side_effect = [get_response, delete_response]
         
         # Execute tool
-        result = tool_manager.execute_tool(Intent.DELETE_PATIENT, patient_id=1)
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
+        result = tool_manager.execute_tool(Intent.DELETE_PATIENT, state_metrics, patient_id=1)
         
         # Verify result
         assert result.success is True
@@ -541,7 +548,8 @@ class TestToolManager:
         mock_http_client.request.return_value = mock_response
         
         # Execute tool
-        result = tool_manager.execute_tool(Intent.GET_SCAN_RESULTS, patient_id=1)
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
+        result = tool_manager.execute_tool(Intent.GET_SCAN_RESULTS, state_metrics, patient_id=1)
         
         # Verify result
         assert result.success is True
@@ -550,7 +558,8 @@ class TestToolManager:
     def test_execute_tool_unknown_intent(self, tool_manager, mock_http_client):
         """Test executing tool with unknown intent."""
         # Execute tool with unknown intent
-        result = tool_manager.execute_tool(Intent.UNKNOWN)
+        state_metrics = {'total_api_calls': 0, 'successful_ops': 0, 'aborted_ops': 0, 'retries': 0}
+        result = tool_manager.execute_tool(Intent.UNKNOWN, state_metrics)
         
         # Verify result
         assert result.success is False

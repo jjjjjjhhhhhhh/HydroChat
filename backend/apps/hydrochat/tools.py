@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from .enums import DownloadStage, Intent
 from .http_client import HttpClient
+from .logging_formatter import metrics_logger
 from .utils import mask_nric
 
 logger = logging.getLogger(__name__)
@@ -429,45 +430,63 @@ class ScanTools:
 # ===== MAIN TOOL MANAGER =====
 
 class ToolManager:
-    """Main tool manager that coordinates all tool operations."""
+    """Main tool manager that coordinates all tool operations with metrics tracking."""
     
     def __init__(self, http_client: HttpClient):
         self.http_client = http_client
         self.patient_tools = PatientTools(http_client)
         self.scan_tools = ScanTools(http_client)
         
-    def execute_tool(self, intent: Intent, **kwargs) -> ToolResponse:
+    def execute_tool(self, intent: Intent, state_metrics: Dict[str, int], **kwargs) -> ToolResponse:
         """
-        Execute appropriate tool based on intent and parameters.
+        Execute appropriate tool based on intent and parameters with metrics tracking.
         
         Args:
             intent: The classified intent
+            state_metrics: Reference to conversation state metrics for updating
             **kwargs: Parameters for the tool
             
         Returns:
             ToolResponse with result or error
         """
-        logger.info(f"[Tools] 🔧 Executing tool for intent: {intent.value}")
+        tool_name = f"tool_{intent.name.lower()}"
+        
+        # Log tool execution start
+        metrics_logger.log_tool_call_start(tool_name, state_metrics)
         
         try:
+            # Execute the appropriate tool based on intent
+            result = None
             if intent == Intent.CREATE_PATIENT:
-                return self.patient_tools.tool_create_patient(**kwargs)
+                result = self.patient_tools.tool_create_patient(**kwargs)
             elif intent == Intent.LIST_PATIENTS:
-                return self.patient_tools.tool_list_patients(**kwargs)
+                result = self.patient_tools.tool_list_patients(**kwargs)
             elif intent == Intent.GET_PATIENT_DETAILS:
-                return self.patient_tools.tool_get_patient(**kwargs)
+                result = self.patient_tools.tool_get_patient(**kwargs)
             elif intent == Intent.UPDATE_PATIENT:
-                return self.patient_tools.tool_update_patient(**kwargs)
+                result = self.patient_tools.tool_update_patient(**kwargs)
             elif intent == Intent.DELETE_PATIENT:
-                return self.patient_tools.tool_delete_patient(**kwargs)
+                result = self.patient_tools.tool_delete_patient(**kwargs)
             elif intent == Intent.GET_SCAN_RESULTS:
-                return self.scan_tools.tool_list_scan_results(**kwargs)
+                result = self.scan_tools.tool_list_scan_results(**kwargs)
             else:
-                error_msg = f"No tool available for intent: {intent.value}"
+                error_msg = f"No tool available for intent: {intent.name}"
                 logger.error(f"[Tools] ❌ {error_msg}")
-                return ToolResponse(success=False, error=error_msg)
+                result = ToolResponse(success=False, error=error_msg)
+            
+            # Track metrics based on result
+            if result and result.success:
+                response_size = len(str(result.data)) if result.data else 0
+                metrics_logger.log_tool_call_success(tool_name, state_metrics, response_size)
+            else:
+                error = Exception(result.error if result else "Unknown tool error")
+                metrics_logger.log_tool_call_error(tool_name, error, state_metrics)
+                
+            return result
                 
         except Exception as e:
+            # Log error and update metrics
             error_msg = f"Unexpected error executing tool: {e}"
             logger.error(f"[Tools] ❌ {error_msg}")
+            metrics_logger.log_tool_call_error(tool_name, e, state_metrics)
             return ToolResponse(success=False, error=error_msg)

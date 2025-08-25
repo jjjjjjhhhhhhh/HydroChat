@@ -12,9 +12,13 @@ from langgraph.prebuilt import ToolNode
 from .enums import Intent, PendingAction, ConfirmationType, DownloadStage
 from .state import ConversationState
 from .intent_classifier import classify_intent, extract_fields, validate_required_patient_fields
+# Phase 9 & 10: Import additional detection functions
+from .intent_classifier import is_show_more_scans, is_depth_map_request, is_stats_request
 from .tools import ToolManager, ToolResponse
 from .name_cache import NameResolutionCache, resolve_patient_name
 from .http_client import HttpClient
+from .logging_formatter import metrics_logger
+from .agent_stats import agent_stats
 from .utils import mask_nric
 
 logger = logging.getLogger(__name__)
@@ -95,6 +99,18 @@ class ConversationGraphNodes:
                 "extracted_fields": {},
                 "conversation_state": conv_state,
                 "next_node": "provide_depth_maps"
+            }
+        
+        # Phase 10: Check for stats requests
+        if is_stats_request(user_message):
+            logger.info(f"[{LogCategory.INTENT}] 📊 Detected stats request")
+            conv_state.recent_messages.append(f"User: {user_message}")
+            return {
+                **state,
+                "classified_intent": None,  # Special handling
+                "extracted_fields": {},
+                "conversation_state": conv_state,
+                "next_node": "provide_agent_stats"
             }
         
         # Regular intent classification
@@ -216,6 +232,7 @@ How would you like to proceed?"""
             # Execute patient creation tool
             tool_result = self.tool_manager.execute_tool(
                 Intent.CREATE_PATIENT,
+                conv_state.metrics,
                 **conv_state.validated_fields
             )
             
@@ -326,7 +343,7 @@ Please provide the corrected information."""
         
         try:
             # Execute list patients tool
-            tool_result = self.tool_manager.execute_tool(Intent.LIST_PATIENTS)
+            tool_result = self.tool_manager.execute_tool(Intent.LIST_PATIENTS, conv_state.metrics)
             
             if tool_result.success:
                 patients_data = tool_result.data
@@ -426,6 +443,7 @@ Please provide the corrected information."""
             # Execute get patient tool
             tool_result = self.tool_manager.execute_tool(
                 Intent.GET_PATIENT_DETAILS,
+                conv_state.metrics,
                 patient_id=patient_id
             )
             
@@ -580,6 +598,7 @@ How would you like to proceed?"""
             
             tool_result = self.tool_manager.execute_tool(
                 Intent.UPDATE_PATIENT,
+                conv_state.metrics,
                 patient_id=patient_id,
                 **update_fields
             )
@@ -756,6 +775,7 @@ Please provide the corrected information."""
             # Execute patient deletion tool
             tool_result = self.tool_manager.execute_tool(
                 Intent.DELETE_PATIENT,
+                conv_state.metrics,
                 patient_id=patient_id
             )
             
@@ -850,6 +870,7 @@ Please provide the corrected information."""
             # Execute scan results tool
             tool_result = self.tool_manager.execute_tool(
                 Intent.GET_SCAN_RESULTS,
+                conv_state.metrics,
                 patient_id=patient_id,
                 limit=conv_state.scan_display_limit
             )
@@ -1217,6 +1238,57 @@ How would you like to proceed?"""
             "should_end": True
         }
 
+    def provide_agent_stats_node(self, state: GraphState) -> GraphState:
+        """
+        Phase 10 Node: Provide comprehensive agent statistics and metrics.
+        """
+        conv_state = state["conversation_state"]
+        
+        logger.info(f"[{LogCategory.FLOW}] 📊 Processing agent stats request")
+        
+        try:
+            # Generate comprehensive statistics using agent_stats
+            stats_data = agent_stats.generate_stats_summary(conv_state)
+            
+            # Format for user display
+            response = agent_stats.format_stats_for_user(stats_data)
+            
+            # Log metrics summary for debugging
+            metrics_logger.log_metrics_summary(conv_state.metrics)
+            
+            logger.info(f"[{LogCategory.SUCCESS}] ✅ Agent statistics provided")
+            
+            return {
+                **state,
+                "agent_response": response,
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": True
+            }
+            
+        except Exception as e:
+            logger.error(f"[{LogCategory.ERROR}] ❌ Error generating agent stats: {e}")
+            
+            # Fallback response with basic metrics
+            metrics = conv_state.metrics
+            basic_response = f"""📊 **Basic Agent Statistics**
+            
+**Operations Summary:**
+• Total Operations: {metrics.get('successful_ops', 0) + metrics.get('aborted_ops', 0)}
+• Successful: {metrics.get('successful_ops', 0)}
+• Failed: {metrics.get('aborted_ops', 0)}
+• Retry Attempts: {metrics.get('retries', 0)}
+
+⚠️ Detailed statistics temporarily unavailable. Basic metrics shown above."""
+
+            return {
+                **state,
+                "agent_response": basic_response,
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": True
+            }
+
     def handle_confirmation_node(self, state: GraphState) -> GraphState:
         """
         Node 13: Handle user confirmations for various workflows.
@@ -1454,6 +1526,7 @@ class ConversationGraph:
         workflow.add_node("provide_stl_links", self.nodes.provide_stl_links_node)
         workflow.add_node("show_more_scans", self.nodes.show_more_scans_node)  # Phase 9: Pagination
         workflow.add_node("provide_depth_maps", self.nodes.provide_depth_maps_node)  # Phase 9: Depth maps
+        workflow.add_node("provide_agent_stats", self.nodes.provide_agent_stats_node)  # Phase 10: Agent statistics
         workflow.add_node("handle_confirmation", self.nodes.handle_confirmation_node)
         workflow.add_node("unknown_intent", self.nodes.unknown_intent_node)
         workflow.add_node("handle_cancellation", self.nodes.handle_cancellation_node)  # Phase 8: Cancellation handler
@@ -1474,6 +1547,7 @@ class ConversationGraph:
                 "get_scan_results": "get_scan_results",
                 "show_more_scans": "show_more_scans",  # Phase 9: Pagination routing
                 "provide_depth_maps": "provide_depth_maps",  # Phase 9: Depth map routing
+                "provide_agent_stats": "provide_agent_stats",  # Phase 10: Agent stats routing
                 "handle_confirmation": "handle_confirmation",
                 "handle_cancellation": "handle_cancellation",  # Phase 8: Cancellation routing
                 "unknown_intent": "unknown_intent"
@@ -1530,6 +1604,7 @@ class ConversationGraph:
         workflow.add_edge("provide_stl_links", END)
         workflow.add_edge("show_more_scans", END)  # Phase 9: Pagination endpoint
         workflow.add_edge("provide_depth_maps", END)  # Phase 9: Depth maps endpoint
+        workflow.add_edge("provide_agent_stats", END)  # Phase 10: Agent stats endpoint
         workflow.add_edge("unknown_intent", END)
         
         return workflow.compile()

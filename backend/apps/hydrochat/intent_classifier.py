@@ -20,6 +20,9 @@ _INTENT_PATTERNS = {
 _SHOW_MORE_PATTERN = re.compile(r'\b(show|display)\s+(more|next|additional)\s+(scan|result)', re.IGNORECASE)
 _DEPTH_MAP_PATTERN = re.compile(r'\b(depth\s+map|show\s+depth)\b', re.IGNORECASE)
 
+# Phase 10: Stats command pattern
+_STATS_PATTERN = re.compile(r'\b(stats|statistics|metrics|status|performance|summary)\b', re.IGNORECASE)
+
 # Field extraction patterns
 _NRIC_PATTERN = re.compile(r'\b([STFG]\d{7}[A-Z])\b')
 _NAME_PATTERN = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b')  # Two+ capitalized tokens
@@ -128,6 +131,13 @@ def is_depth_map_request(text: str) -> bool:
     Phase 9: Check if user is requesting depth map information.
     """
     return _DEPTH_MAP_PATTERN.search(text) is not None
+
+
+def is_stats_request(text: str) -> bool:
+    """
+    Phase 10: Check if user is requesting agent statistics.
+    """
+    return _STATS_PATTERN.search(text) is not None
 
 
 # Fallback LLM classification stub (returns UNKNOWN for now)

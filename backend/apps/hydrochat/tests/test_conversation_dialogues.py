@@ -110,8 +110,11 @@ class TestConversationDialogues:
                 assert updated_state.intent == Intent.LIST_PATIENTS
                 assert len(updated_state.recent_messages) >= 2  # User message + assistant response
                 
-                # Verify tool was called correctly
-                mock_tool_mgr.execute_tool.assert_called_once_with(Intent.LIST_PATIENTS)
+                # Verify tool was called correctly (state_metrics is the second argument)
+                mock_tool_mgr.execute_tool.assert_called_once()
+                call_args = mock_tool_mgr.execute_tool.call_args
+                assert call_args[0][0] == Intent.LIST_PATIENTS  # First positional arg is intent
+                assert isinstance(call_args[0][1], dict)  # Second positional arg is state_metrics
                 
         print("✅ Phase 6 Test 2: List patients basic flow with formatting - PASSED")
 
