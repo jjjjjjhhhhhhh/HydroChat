@@ -71,7 +71,33 @@ class ConversationGraphNodes:
         
         logger.info(f"[{LogCategory.INTENT}] 🧠 Classifying intent for message: '{user_message[:50]}...'")
         
-        # Classify intent
+        # Phase 9: Check for pagination requests first if we have scan results
+        from .intent_classifier import is_show_more_scans, is_depth_map_request
+        
+        if is_show_more_scans(user_message) and conv_state.scan_results_buffer:
+            logger.info(f"[{LogCategory.INTENT}] 📄 Detected pagination request")
+            conv_state.recent_messages.append(f"User: {user_message}")
+            return {
+                **state,
+                "classified_intent": None,  # Special handling, not a normal intent
+                "extracted_fields": {},
+                "conversation_state": conv_state,
+                "next_node": "show_more_scans"
+            }
+        
+        # Phase 9: Check for depth map requests during scan results context  
+        if is_depth_map_request(user_message) and conv_state.scan_results_buffer:
+            logger.info(f"[{LogCategory.INTENT}] 🗺️ Detected depth map request")
+            conv_state.recent_messages.append(f"User: {user_message}")
+            return {
+                **state,
+                "classified_intent": None,  # Special handling
+                "extracted_fields": {},
+                "conversation_state": conv_state,
+                "next_node": "provide_depth_maps"
+            }
+        
+        # Regular intent classification
         intent = classify_intent(user_message)
         extracted_fields = extract_fields(user_message)
         
@@ -1023,6 +1049,174 @@ How would you like to proceed?"""
             "should_end": True
         }
 
+    def show_more_scans_node(self, state: GraphState) -> GraphState:
+        """
+        Phase 9 Node: Handle pagination for scan results ("show more scans").
+        """
+        conv_state = state["conversation_state"]
+        
+        logger.info(f"[{LogCategory.FLOW}] 📄 Processing show more scans request")
+        
+        # Get scan results from buffer
+        scan_results = conv_state.scan_results_buffer
+        patient_id = conv_state.selected_patient_id
+        
+        if not scan_results:
+            logger.error(f"[{LogCategory.ERROR}] ❌ No scan results in buffer for pagination")
+            response = "❌ No scan results available to show more. Please search for scans first."
+            
+            return {
+                **state,
+                "agent_response": response,
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": False
+            }
+        
+        # Calculate pagination
+        current_offset = conv_state.scan_pagination_offset
+        total_results = len(scan_results)
+        display_limit = conv_state.scan_display_limit
+        
+        # Check if there are more results to show
+        if current_offset >= total_results:
+            response = f"📊 All {total_results} scan results have been displayed for patient ID {patient_id}."
+            
+            return {
+                **state,
+                "agent_response": response,
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": True
+            }
+        
+        # Calculate what to show next
+        end_index = min(current_offset + display_limit, total_results)
+        next_batch = scan_results[current_offset:end_index]
+        
+        logger.info(f"[{LogCategory.FLOW}] 📄 Showing results {current_offset+1}-{end_index} of {total_results}")
+        
+        # Format additional results
+        response = f"📊 **More Scan Results for Patient ID {patient_id}** (showing {current_offset+1}-{end_index} of {total_results}):\n\n"
+        
+        for i, result in enumerate(next_batch):
+            scan_id = result.get('scan_id', 'Unknown')
+            scan_date = result.get('scan_date', result.get('created_at', 'Unknown'))[:10]
+            
+            # Use absolute numbering (not relative to batch)
+            result_num = current_offset + i + 1
+            response += f"**{result_num}. Scan {scan_id}** ({scan_date})\n"
+            
+            # Show preview image if available 
+            if result.get('preview_image'):
+                response += f"   📸 [Preview Image]({result['preview_image']})\n"
+            
+            # Show volume estimate if available
+            if result.get('volume_estimate'):
+                response += f"   📏 Volume: {result['volume_estimate']} mm³\n"
+            
+            response += "\n"
+        
+        # Update pagination offset
+        conv_state.scan_pagination_offset = end_index
+        
+        # Check if there are more results available
+        remaining = total_results - end_index
+        if remaining > 0:
+            response += f"*(Say 'show more scans' to display {min(remaining, display_limit)} more results.)*\n\n"
+        else:
+            response += "*All scan results have been displayed.*\n\n"
+        
+        # Phase 9: Two-stage flow - ask for STL download confirmation for these additional results
+        # But only if we haven't already sent STL links
+        if conv_state.download_stage == DownloadStage.PREVIEW_SHOWN:
+            response += "Would you like to download STL files for these additional scans? (yes/no)"
+            conv_state.confirmation_required = True
+            conv_state.awaiting_confirmation_type = ConfirmationType.DOWNLOAD_STL
+        elif conv_state.download_stage == DownloadStage.STL_LINKS_SENT:
+            response += "Would you like STL download links for these additional scans? (yes/no)"
+            conv_state.confirmation_required = True
+            conv_state.awaiting_confirmation_type = ConfirmationType.DOWNLOAD_STL
+            # Reset download stage to allow new STL links
+            conv_state.download_stage = DownloadStage.PREVIEW_SHOWN
+        
+        return {
+            **state,
+            "agent_response": response,
+            "conversation_state": conv_state,
+            "next_node": "end",
+            "should_end": False
+        }
+
+    def provide_depth_maps_node(self, state: GraphState) -> GraphState:
+        """
+        Phase 9 Node: Provide depth map information for scan results.
+        """
+        conv_state = state["conversation_state"]
+        
+        logger.info(f"[{LogCategory.FLOW}] 🗺️ Processing depth map request")
+        
+        # Get scan results from buffer
+        scan_results = conv_state.scan_results_buffer
+        patient_id = conv_state.selected_patient_id
+        
+        if not scan_results:
+            logger.error(f"[{LogCategory.ERROR}] ❌ No scan results in buffer for depth maps")
+            response = "❌ No scan results available for depth map display. Please search for scans first."
+            
+            return {
+                **state,
+                "agent_response": response,
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": False
+            }
+        
+        # Get currently displayed results based on pagination offset
+        current_offset = conv_state.scan_pagination_offset or conv_state.scan_display_limit
+        displayed_results = scan_results[:current_offset]
+        
+        logger.info(f"[{LogCategory.FLOW}] 🗺️ Providing depth maps for {len(displayed_results)} results")
+        
+        # Format depth map information
+        response = f"🗺️ **Depth Map Information for Patient ID {patient_id}:**\n\n"
+        
+        depth_count = 0
+        for i, result in enumerate(displayed_results):
+            scan_id = result.get('scan_id', 'Unknown')
+            scan_date = result.get('scan_date', result.get('created_at', 'Unknown'))[:10]
+            
+            response += f"**{i+1}. Scan {scan_id}** ({scan_date})\n"
+            
+            # Show depth map links if available
+            if result.get('depth_map_8bit'):
+                response += f"   🗺️ [8-bit Depth Map]({result['depth_map_8bit']})\n"
+                depth_count += 1
+                
+            if result.get('depth_map_16bit'):
+                response += f"   🗺️ [16-bit Depth Map]({result['depth_map_16bit']})\n"
+                depth_count += 1
+            
+            if not result.get('depth_map_8bit') and not result.get('depth_map_16bit'):
+                response += f"   ⚠️ No depth maps available\n"
+            
+            response += "\n"
+        
+        if depth_count == 0:
+            response += "⚠️ No depth maps are available for these scan results."
+        else:
+            response += f"✅ {depth_count} depth map(s) available for download."
+        
+        logger.info(f"[{LogCategory.SUCCESS}] ✅ Provided {depth_count} depth map links")
+        
+        return {
+            **state,
+            "agent_response": response,
+            "conversation_state": conv_state,
+            "next_node": "end",
+            "should_end": True
+        }
+
     def handle_confirmation_node(self, state: GraphState) -> GraphState:
         """
         Node 13: Handle user confirmations for various workflows.
@@ -1258,6 +1452,8 @@ class ConversationGraph:
         workflow.add_node("get_patient_details", self.nodes.get_patient_details_node)
         workflow.add_node("get_scan_results", self.nodes.get_scan_results_node)
         workflow.add_node("provide_stl_links", self.nodes.provide_stl_links_node)
+        workflow.add_node("show_more_scans", self.nodes.show_more_scans_node)  # Phase 9: Pagination
+        workflow.add_node("provide_depth_maps", self.nodes.provide_depth_maps_node)  # Phase 9: Depth maps
         workflow.add_node("handle_confirmation", self.nodes.handle_confirmation_node)
         workflow.add_node("unknown_intent", self.nodes.unknown_intent_node)
         workflow.add_node("handle_cancellation", self.nodes.handle_cancellation_node)  # Phase 8: Cancellation handler
@@ -1276,7 +1472,10 @@ class ConversationGraph:
                 "list_patients": "list_patients",
                 "get_patient_details": "get_patient_details",
                 "get_scan_results": "get_scan_results",
+                "show_more_scans": "show_more_scans",  # Phase 9: Pagination routing
+                "provide_depth_maps": "provide_depth_maps",  # Phase 9: Depth map routing
                 "handle_confirmation": "handle_confirmation",
+                "handle_cancellation": "handle_cancellation",  # Phase 8: Cancellation routing
                 "unknown_intent": "unknown_intent"
             }
         )
@@ -1329,6 +1528,8 @@ class ConversationGraph:
         workflow.add_edge("get_patient_details", END)
         workflow.add_edge("get_scan_results", END)
         workflow.add_edge("provide_stl_links", END)
+        workflow.add_edge("show_more_scans", END)  # Phase 9: Pagination endpoint
+        workflow.add_edge("provide_depth_maps", END)  # Phase 9: Depth maps endpoint
         workflow.add_edge("unknown_intent", END)
         
         return workflow.compile()

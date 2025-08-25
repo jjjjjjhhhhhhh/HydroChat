@@ -16,6 +16,10 @@ _INTENT_PATTERNS = {
     Intent.CANCEL: re.compile(r'\b(cancel|abort|stop|quit|exit|reset)\b', re.IGNORECASE),  # Phase 8: Cancellation detection
 }
 
+# Phase 9: Additional patterns for pagination and depth maps
+_SHOW_MORE_PATTERN = re.compile(r'\b(show|display)\s+(more|next|additional)\s+(scan|result)', re.IGNORECASE)
+_DEPTH_MAP_PATTERN = re.compile(r'\b(depth\s+map|show\s+depth)\b', re.IGNORECASE)
+
 # Field extraction patterns
 _NRIC_PATTERN = re.compile(r'\b([STFG]\d{7}[A-Z])\b')
 _NAME_PATTERN = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b')  # Two+ capitalized tokens
@@ -112,6 +116,20 @@ def validate_required_patient_fields(fields: Dict[str, Any]) -> Tuple[bool, set[
     return len(missing) == 0, missing
 
 
+def is_show_more_scans(text: str) -> bool:
+    """
+    Phase 9: Check if user is requesting to show more scan results.
+    """
+    return _SHOW_MORE_PATTERN.search(text) is not None
+
+
+def is_depth_map_request(text: str) -> bool:
+    """
+    Phase 9: Check if user is requesting depth map information.
+    """
+    return _DEPTH_MAP_PATTERN.search(text) is not None
+
+
 # Fallback LLM classification stub (returns UNKNOWN for now)
 def llm_classify_intent_fallback(text: str) -> Intent:
     """
@@ -124,5 +142,5 @@ def llm_classify_intent_fallback(text: str) -> Intent:
 
 __all__ = [
     'classify_intent', 'extract_fields', 'validate_required_patient_fields',
-    'llm_classify_intent_fallback'
+    'llm_classify_intent_fallback', 'is_show_more_scans', 'is_depth_map_request'
 ]
