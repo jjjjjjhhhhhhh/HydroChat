@@ -140,17 +140,49 @@ def is_stats_request(text: str) -> bool:
     return _STATS_PATTERN.search(text) is not None
 
 
-# Fallback LLM classification stub (returns UNKNOWN for now)
-def llm_classify_intent_fallback(text: str) -> Intent:
+# Fallback LLM classification using Gemini API (Phase 14)
+async def llm_classify_intent_fallback(text: str, context: str = "", conversation_summary: str = "") -> Intent:
     """
-    Placeholder for future LLM-based classification.
-    Currently returns UNKNOWN to trigger clarifying prompt.
+    LLM-based intent classification using Gemini API per §15.
+    Used when regex-based classification returns UNKNOWN.
+    
+    Args:
+        text: User message to classify
+        context: Recent conversation context
+        conversation_summary: Summary of conversation history
+    
+    Returns:
+        Intent enum value or UNKNOWN if classification fails
     """
-    # TODO: Implement LLM classification with strict JSON schema {intent, reason}
-    return Intent.UNKNOWN
+    try:
+        from .gemini_client import classify_intent_fallback
+        return await classify_intent_fallback(text, context, conversation_summary)
+    except ImportError:
+        # Fallback if Gemini client not available
+        return Intent.UNKNOWN
+
+
+async def llm_extract_fields_fallback(text: str, missing_fields: list[str]) -> Dict[str, Any]:
+    """
+    LLM-based field extraction using Gemini API when regex patterns fail.
+    
+    Args:
+        text: User message to extract fields from
+        missing_fields: List of field names that need to be extracted
+    
+    Returns:
+        Dict with extracted fields, empty if extraction fails
+    """
+    try:
+        from .gemini_client import extract_fields_fallback
+        return await extract_fields_fallback(text, missing_fields)
+    except ImportError:
+        # Fallback if Gemini client not available
+        return {}
 
 
 __all__ = [
     'classify_intent', 'extract_fields', 'validate_required_patient_fields',
-    'llm_classify_intent_fallback', 'is_show_more_scans', 'is_depth_map_request'
+    'llm_classify_intent_fallback', 'llm_extract_fields_fallback',
+    'is_show_more_scans', 'is_depth_map_request', 'is_stats_request'
 ]

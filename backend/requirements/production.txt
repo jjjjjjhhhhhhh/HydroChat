@@ -1,9 +1,6 @@
 # Include base requirements
 -r base.txt
 
-# Production database
-psycopg2-binary==2.9.9
-
 # Production server
 gunicorn==21.2.0
 whitenoise==6.6.0
@@ -19,9 +16,9 @@ django-storages==1.14.2
 django-ratelimit==4.1.0
 django-security==0.17.0
 
-# Performance
+# Performance and caching (Phase 18 Redis support)
 redis==5.0.1
 django-redis==5.4.0
 
 # 3D Mesh Processing Performance
-numba>=0.58.0 
+numba==0.61.0 
