@@ -131,15 +131,27 @@ const PatientsListScreen = ({navigation, route}) => {
           
           <Text style={styles.patientsListTitle}>Patients Directory</Text>
           
-          <TouchableOpacity 
-            style={styles.addButton}
-            onPress={() => navigation.navigate('New Patient Form')}
-          >
-            <Svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <Path d="M1 7H13" stroke="black" strokeWidth="2" strokeLinecap="round"/>
-              <Path d="M7 1L7 13" stroke="black" strokeWidth="2" strokeLinecap="round"/>
-            </Svg>
-          </TouchableOpacity>
+          <View style={styles.headerButtons}>
+            <TouchableOpacity 
+              style={styles.addButton}
+              onPress={() => navigation.navigate('New Patient Form')}
+            >
+              <Svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <Path d="M1 7H13" stroke="black" strokeWidth="2" strokeLinecap="round"/>
+                <Path d="M7 1L7 13" stroke="black" strokeWidth="2" strokeLinecap="round"/>
+              </Svg>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.chatbotButton}
+              onPress={() => navigation.navigate('HydroChat')}
+              accessibilityLabel="Open HydroChat"
+            >
+              <Svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <Path d="M10 4.31055C8.55795 4.31055 7.11941 4.80223 5.94759 5.78535C5.24241 6.37708 4.69721 7.09706 4.31869 7.88547C4.26616 7.88055 4.21504 7.86908 4.16111 7.86908C3.21924 7.86908 2.46087 8.62744 2.46087 9.56929V11.6706C2.46087 12.6125 3.21924 13.3708 4.16111 13.3708C4.21505 13.3708 4.26617 13.3591 4.31869 13.3544C4.38646 13.4949 4.45658 13.6343 4.53561 13.7713C4.84455 14.3227 5.66992 13.8506 5.35121 13.305C4.04625 11.0447 4.55164 8.18053 6.55093 6.50292C8.55023 4.82527 11.4542 4.82527 13.4535 6.50292C15.4528 8.18053 15.9582 11.0447 14.6533 13.305L14.6392 13.3284L14.6298 13.3518C14.6298 13.3518 13.996 14.7539 12.7515 14.7539L11.1761 14.7398C11.0284 14.524 10.7919 14.3738 10.5096 14.3738H9.49405C9.03871 14.3738 8.67241 14.741 8.67241 15.1967C8.67241 15.4776 8.85064 15.6908 9.25847 15.6911L12.7515 15.6911C14.6191 15.6911 15.4268 13.8576 15.4636 13.7727V13.7677C15.5419 13.6319 15.6109 13.4925 15.6782 13.3533C15.7331 13.3583 15.7866 13.3697 15.8431 13.3697C16.785 13.3697 17.5434 12.6113 17.5434 11.6695V9.56821C17.5434 8.62636 16.785 7.868 15.8431 7.868C15.7889 7.868 15.7374 7.877 15.6844 7.8844C15.3068 7.096 14.7621 6.37607 14.0569 5.78436C12.8851 4.80124 11.4419 4.31055 10 4.31055ZM7.95079 7.29773C7.58477 7.27383 7.25046 7.35126 6.95827 7.65887C6.17922 8.47905 5.69794 9.59537 5.69794 10.7842C5.69794 11.7648 6.02566 12.8636 6.5778 12.9037C7.36431 12.9609 8.60546 12.4444 10.0025 12.4444C11.4829 12.4444 12.7893 13.024 13.5641 12.8867C14.0336 12.8037 14.3081 11.6813 14.3081 10.7842C14.3081 9.59537 13.8268 8.47905 13.0478 7.65887C12.2687 6.83866 11.1925 7.65887 10.0036 7.65887C9.26066 7.65887 8.562 7.33778 7.95215 7.29773ZM7.77632 9.31907C8.21063 9.31924 8.56267 9.67126 8.56284 10.1056C8.5627 10.5399 8.21066 10.8919 7.77632 10.8921C7.34198 10.8919 6.98996 10.5399 6.98979 10.1056C6.99 9.67126 7.34202 9.31924 7.77637 9.31907ZM12.2288 9.31907C12.6631 9.31924 13.0151 9.67126 13.0153 10.1056C13.0151 10.5399 12.6631 10.8919 12.2288 10.8921C11.7944 10.8919 11.4424 10.5399 11.4422 10.1056C11.4424 9.67126 11.7944 9.31924 11.4422 9.31907Z" fill="black"/>
+              </Svg>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Search Bar */}
@@ -216,12 +228,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#707070',
   },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   addButton: {
     width: 40,
     height: 40,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'transparent',
+  },
+  chatbotButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    marginLeft: 5,
   },
   searchBarContainer: {
     width: '100%',
