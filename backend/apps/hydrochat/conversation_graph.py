@@ -1869,6 +1869,7 @@ Keep summary concise and factual. Focus on patient management context only."""
             **state,
             "agent_response": response,
             "conversation_state": conv_state,
+            "should_end": False,  # Conversation continues after cancellation
             "next_node": "finalize_response"  # Route to finalization
         }
 
