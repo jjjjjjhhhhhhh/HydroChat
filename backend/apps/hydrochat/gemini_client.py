@@ -188,19 +188,35 @@ class GeminiClient:
         if clean_summary:
             context_section += f"\\nConversation summary: {clean_summary}"
         
+        # Build intents list dynamically from enum
+        from .enums import Intent
+        intents_list = []
+        intent_descriptions = {
+            Intent.CREATE_PATIENT: "Creating new patient records",
+            Intent.UPDATE_PATIENT: "Modifying existing patient information", 
+            Intent.DELETE_PATIENT: "Removing patient records",
+            Intent.LIST_PATIENTS: "Showing all patients",
+            Intent.GET_PATIENT_DETAILS: "Getting specific patient information",
+            Intent.GET_SCAN_RESULTS: "Retrieving scan/wound analysis results",
+            Intent.SHOW_MORE_SCANS: "Show additional scan results",
+            Intent.PROVIDE_DEPTH_MAPS: "Provide depth map data",
+            Intent.PROVIDE_AGENT_STATS: "Show agent statistics",
+            Intent.CANCEL: "Canceling current operation",
+            Intent.UNKNOWN: "Cannot determine intent or ambiguous"
+        }
+        
+        for i, intent in enumerate(Intent, 1):
+            description = intent_descriptions.get(intent, "Medical assistant intent")
+            intents_list.append(f"{i}. {intent.name} - {description}")
+        
+        intents_section = "\n".join(intents_list)
+        
         prompt = f"""You are a medical assistant for wound care management. Classify the user's intent from this message.
 
 User message: "{clean_message}"{context_section}
 
 Classify into exactly one of these intents:
-1. CREATE_PATIENT - Creating new patient records
-2. UPDATE_PATIENT - Modifying existing patient information
-3. DELETE_PATIENT - Removing patient records
-4. LIST_PATIENTS - Showing all patients
-5. GET_SCAN_RESULTS - Retrieving scan/wound analysis results
-6. GET_PATIENT_DETAILS - Getting specific patient information
-7. CANCEL - Canceling current operation
-8. UNKNOWN - Cannot determine intent or ambiguous
+{intents_section}
 
 Examples:
 - "add new patient John Doe" → CREATE_PATIENT

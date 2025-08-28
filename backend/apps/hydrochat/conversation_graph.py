@@ -1,9 +1,9 @@
 # HydroChat Conversation Graph Implementation
 # LangGraph-based conversation orchestrator for patient management workflows
-# Implements nodes 1-12 subset for create patient and list patients flows
+# Phase 16: Implements centralized routing with validated state transitions
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Literal
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, Literal, cast
 from datetime import datetime
 
 from langgraph.graph import StateGraph, MessagesState, END
@@ -20,6 +20,8 @@ from .http_client import HttpClient
 from .logging_formatter import metrics_logger
 from .agent_stats import agent_stats
 from .utils import mask_nric
+# Phase 16: Import centralized routing
+from .graph_routing import GraphRoutingIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -2156,51 +2158,34 @@ class ConversationGraph:
         return workflow.compile()
 
     def _route_from_ingest_message(self, state: GraphState) -> str:
-        """Route from ingest_user_message node based on next_node."""
-        return state.get("next_node") or "classify_intent"
+        """Route from ingest_user_message node using centralized routing."""
+        return GraphRoutingIntegration.route_from_ingest_message(cast(Dict[str, Any], state))
 
     def _route_from_classify_intent(self, state: GraphState) -> str:
-        """Route from classify_intent node based on next_node or confirmation state."""
-        conv_state = state["conversation_state"]
-        
-        # Check if we're waiting for a confirmation
-        if conv_state.confirmation_required:
-            return "handle_confirmation"
-        
-        return state.get("next_node") or "unknown_intent"
+        """Route from classify_intent node using centralized routing."""
+        return GraphRoutingIntegration.route_from_classify_intent(cast(Dict[str, Any], state))
 
     def _route_from_create_patient(self, state: GraphState) -> str:
-        """Route from create_patient node based on next_node."""
-        next_node = state.get("next_node") or "finalize_response"
-        return "finalize_response" if next_node == "end" else next_node
+        """Route from create_patient node using centralized routing."""
+        return GraphRoutingIntegration.route_from_create_patient(cast(Dict[str, Any], state))
 
     def _route_from_update_patient(self, state: GraphState) -> str:
-        """Route from update_patient node based on next_node."""
-        next_node = state.get("next_node") or "finalize_response"
-        return "finalize_response" if next_node == "end" else next_node
+        """Route from update_patient node using centralized routing."""
+        return GraphRoutingIntegration.route_from_update_patient(cast(Dict[str, Any], state))
 
     def _route_from_delete_patient(self, state: GraphState) -> str:
-        """Route from delete_patient node (always to finalization)."""
-        return "finalize_response"
+        """Route from delete_patient node using centralized routing."""
+        return GraphRoutingIntegration.route_from_delete_patient(cast(Dict[str, Any], state))
 
     def _route_from_confirmation(self, state: GraphState) -> str:
-        """Route from handle_confirmation node based on next_node."""
-        next_node = state.get("next_node") or "finalize_response"
-        return "finalize_response" if next_node == "end" else next_node
+        """Route from handle_confirmation node using centralized routing."""
+        return GraphRoutingIntegration.route_from_confirmation(cast(Dict[str, Any], state))
 
     def _route_to_summarization_check(self, state: GraphState) -> str:
         """
-        Check if conversation history needs summarization (>5 turns).
-        Route to summarize_history if needed, otherwise to finalize_response.
+        Generic routing for nodes that need summarization check using centralized routing.
         """
-        conv_state = state["conversation_state"]
-        
-        # Check if we need to summarize (>5 messages and no recent summary)
-        if len(conv_state.recent_messages) >= 5:
-            logger.debug(f"[{LogCategory.FLOW}] History at capacity ({len(conv_state.recent_messages)} messages), routing to summarization")
-            return "summarize_history"
-        
-        return "finalize_response"
+        return GraphRoutingIntegration.route_to_summarization_check(cast(Dict[str, Any], state))
 
     async def process_message(self, user_message: str, conversation_state: ConversationState) -> Tuple[str, ConversationState]:
         """
