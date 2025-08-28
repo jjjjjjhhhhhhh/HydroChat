@@ -13,9 +13,9 @@ from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from django.contrib.auth import get_user_model
 
-from ..views import ConversationStateStore, ConverseAPIView, get_conversation_graph
-from ..state import ConversationState
-from ..enums import Intent, PendingAction, ConfirmationType, DownloadStage
+from apps.hydrochat.views import ConversationStateStore, ConverseAPIView, get_conversation_graph
+from apps.hydrochat.state import ConversationState
+from apps.hydrochat.enums import Intent, PendingAction, ConfirmationType, DownloadStage
 
 
 User = get_user_model()

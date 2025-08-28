@@ -1,4 +1,5 @@
 # Phase 10: Agent Stats Command Implementation for HydroChat
+# Phase 14: Extended with Gemini API metrics per §17
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -34,6 +35,14 @@ class AgentStats:
         state_metrics = conversation_state.metrics.copy()
         http_metrics_copy = http_metrics.copy()
         
+        # Phase 14: Extract Gemini API metrics per §17
+        gemini_metrics = {}
+        try:
+            from .gemini_client import get_gemini_metrics
+            gemini_metrics = get_gemini_metrics()
+        except ImportError:
+            self.logger.debug("[STATS] Gemini client not available, skipping LLM metrics")
+        
         # Calculate derived metrics
         total_operations = state_metrics.get('successful_ops', 0) + state_metrics.get('aborted_ops', 0)
         success_rate = (state_metrics.get('successful_ops', 0) / total_operations * 100) if total_operations > 0 else 0
@@ -57,6 +66,14 @@ class AgentStats:
                 'successful_requests': http_metrics_copy.get('successful_ops', 0),
                 'failed_requests': http_metrics_copy.get('aborted_ops', 0),
                 'retry_attempts': http_metrics_copy.get('retries', 0)
+            },
+            'llm_api_metrics': {
+                'total_calls': gemini_metrics.get('successful_calls', 0) + gemini_metrics.get('failed_calls', 0),
+                'successful_calls': gemini_metrics.get('successful_calls', 0),
+                'failed_calls': gemini_metrics.get('failed_calls', 0),
+                'total_tokens_used': gemini_metrics.get('total_tokens_used', 0),
+                'estimated_cost_usd': round(gemini_metrics.get('total_cost_usd', 0), 4),
+                'last_call_timestamp': gemini_metrics.get('last_call_timestamp')
             },
             'conversation_state': conversation_analysis,
             'performance_indicators': self._generate_performance_indicators(state_metrics, http_metrics_copy),

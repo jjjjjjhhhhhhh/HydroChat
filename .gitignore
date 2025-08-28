@@ -105,7 +105,8 @@ backend/apps/scans/views_original_backup.py
 backend/logs
 
 # Github Codespaces
-.github
+.github/copilot-instructions.md
+.github/chatmodes
 
 # ===========================================
 # MEDIA & GENERATED FILES
@@ -124,6 +125,9 @@ backend/logs
 # ===========================================
 # TEST OUTPUT FILES
 # ===========================================
+
+# Jest coverage reports (frontend)
+frontend/coverage/
 
 # Test script outputs (keep info.txt files)
 backend/test/test_complete_flow/*

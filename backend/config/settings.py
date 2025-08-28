@@ -13,6 +13,10 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 import os
 from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -179,3 +183,19 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
+
+# Phase 14 - Gemini API Configuration (HydroChat.md §16)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if not GEMINI_API_KEY:
+    if DEBUG:
+        print("Warning: GEMINI_API_KEY not found in environment. LLM fallback will be disabled.")
+    else:
+        raise ImproperlyConfigured('GEMINI_API_KEY environment variable is required in production.')
+
+# Gemini model specification per HydroChat.md §2
+GEMINI_MODEL = 'gemini-2.5-flash'  # Speed optimization as per spec
+
+# LLM integration settings
+LLM_REQUEST_TIMEOUT = 30.0  # seconds
+LLM_MAX_RETRIES = 3
+LLM_RETRY_DELAY = 1.0  # seconds for exponential backoff

@@ -16,6 +16,8 @@ class PendingAction(Enum):
     CREATE_PATIENT = auto()
     UPDATE_PATIENT = auto()
     DELETE_PATIENT = auto()
+    LIST_PATIENTS = auto()  # Added for Phase 13
+    GET_PATIENT_DETAILS = auto()  # Added for Phase 13  
     GET_SCAN_RESULTS = auto()
 
 class ConfirmationType(Enum):

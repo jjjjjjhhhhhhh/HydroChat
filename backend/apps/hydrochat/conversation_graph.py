@@ -117,6 +117,54 @@ class ConversationGraphNodes:
         intent = classify_intent(user_message)
         extracted_fields = extract_fields(user_message)
         
+        # Phase 14: LLM fallback when regex returns UNKNOWN per §15
+        if intent == Intent.UNKNOWN:
+            logger.info(f"[{LogCategory.INTENT}] 🤖 Regex classification returned UNKNOWN, trying LLM fallback")
+            try:
+                # Import async function
+                from .intent_classifier import llm_classify_intent_fallback
+                
+                # Build context for LLM
+                context = " | ".join(list(conv_state.recent_messages)[-3:]) if conv_state.recent_messages else ""
+                conversation_summary = conv_state.history_summary if hasattr(conv_state, 'history_summary') else ""
+                
+                # Call async LLM fallback
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're already in an async context, create a new task
+                    intent = asyncio.create_task(llm_classify_intent_fallback(user_message, context, conversation_summary))
+                    intent = intent.result() if hasattr(intent, 'result') else Intent.UNKNOWN
+                else:
+                    intent = loop.run_until_complete(llm_classify_intent_fallback(user_message, context, conversation_summary))
+                
+                logger.info(f"[{LogCategory.INTENT}] 🤖 LLM fallback classified: {intent.value}")
+                
+                # If LLM also found fields, try field extraction fallback
+                if intent != Intent.UNKNOWN and not extracted_fields:
+                    logger.info(f"[{LogCategory.INTENT}] 🔍 Attempting LLM field extraction fallback")
+                    try:
+                        from .intent_classifier import llm_extract_fields_fallback
+                        # Determine what fields we might need based on intent
+                        needed_fields = []
+                        if intent in [Intent.CREATE_PATIENT, Intent.UPDATE_PATIENT]:
+                            needed_fields = ['first_name', 'last_name', 'nric', 'contact_no', 'date_of_birth', 'details']
+                        elif intent in [Intent.GET_PATIENT_DETAILS, Intent.DELETE_PATIENT]:
+                            needed_fields = ['patient_id', 'nric', 'first_name', 'last_name']
+                        
+                        if needed_fields:
+                            llm_fields = loop.run_until_complete(llm_extract_fields_fallback(user_message, needed_fields))
+                            if llm_fields:
+                                extracted_fields.update(llm_fields)
+                                logger.info(f"[{LogCategory.INTENT}] 🔍 LLM extracted additional fields: {list(llm_fields.keys())}")
+                    
+                    except Exception as e:
+                        logger.warning(f"[{LogCategory.INTENT}] LLM field extraction failed: {e}")
+                        
+            except Exception as e:
+                logger.warning(f"[{LogCategory.INTENT}] LLM fallback failed: {e}, using UNKNOWN")
+                intent = Intent.UNKNOWN
+        
         # Update conversation state
         conv_state.intent = intent
         
@@ -1424,9 +1472,369 @@ Please let me know how I can assist you with patient management."""
             "should_end": False
         }
 
+    def ingest_user_message_node(self, state: GraphState) -> GraphState:
+        """
+        Node 1: Ingest and preprocess user message (Phase 15).
+        
+        Message preprocessing, validation, sanitization before classification.
+        Entry point for all conversation flows per §24.1.
+        """
+        user_message = state["user_message"]
+        conv_state = state["conversation_state"]
+        
+        logger.info(f"[{LogCategory.FLOW}] 📝 Ingesting user message: '{user_message[:50]}...'")
+        
+        # Input validation and sanitization
+        if not user_message or not user_message.strip():
+            logger.warning(f"[{LogCategory.ERROR}] ⚠️ Empty or whitespace-only message")
+            return {
+                **state,
+                "agent_response": "Please provide a message. How can I help you with patient management?",
+                "conversation_state": conv_state,
+                "next_node": "end",
+                "should_end": False
+            }
+        
+        # Length validation (prevent token abuse per §26)
+        MAX_MESSAGE_LENGTH = 2000  # Reasonable limit for patient management tasks
+        if len(user_message) > MAX_MESSAGE_LENGTH:
+            logger.warning(f"[{LogCategory.ERROR}] ⚠️ Message too long: {len(user_message)} chars")
+            return {
+                **state,
+                "agent_response": f"Message too long ({len(user_message)} characters). Please keep messages under {MAX_MESSAGE_LENGTH} characters.",
+                "conversation_state": conv_state,
+                "next_node": "end", 
+                "should_end": False
+            }
+        
+        # Basic sanitization for security (prevent obvious injection attempts)
+        sanitized_message = user_message.strip()
+        
+        # Check for malicious patterns per security requirements
+        suspicious_patterns = [
+            r'<script.*?</script>',
+            r'javascript:',
+            r'data:text/html',
+            r'eval\s*\(',
+            r'exec\s*\('
+        ]
+        
+        import re
+        for pattern in suspicious_patterns:
+            if re.search(pattern, sanitized_message, re.IGNORECASE):
+                logger.warning(f"[{LogCategory.ERROR}] ⚠️ Suspicious pattern detected, sanitizing input")
+                # Don't reject entirely, just sanitize - this is a medical application
+                sanitized_message = re.sub(pattern, '[sanitized]', sanitized_message, flags=re.IGNORECASE)
+        
+        # Update state with sanitized message
+        state["user_message"] = sanitized_message
+        
+        # Check for cancellation early (per §28)
+        cancellation_patterns = [r'\bcancel\b', r'\babort\b', r'\bstop\b', r'\breset\b']
+        is_cancellation = any(re.search(pattern, sanitized_message, re.IGNORECASE) for pattern in cancellation_patterns)
+        
+        if is_cancellation:
+            logger.info(f"[{LogCategory.INTENT}] 🛑 Cancellation detected in message")
+            return {
+                **state,
+                "conversation_state": conv_state,
+                "next_node": "handle_cancellation"
+            }
+        
+        # Successful ingestion - proceed to intent classification
+        logger.info(f"[{LogCategory.FLOW}] ✅ Message ingested successfully")
+        
+        return {
+            **state,
+            "conversation_state": conv_state,
+            "next_node": "classify_intent"
+        }
+
+    def summarize_history_node(self, state: GraphState) -> GraphState:
+        """
+        Node 15: Summarize conversation history when >5 turns (Phase 15).
+        
+        Uses Gemini API to create coherent conversation history per §27.
+        Triggered when recent_messages reaches capacity (5 items).
+        """
+        conv_state = state["conversation_state"]
+        
+        logger.info(f"[{LogCategory.FLOW}] 📚 Processing history summarization")
+        
+        # Check if summarization is needed
+        if len(conv_state.recent_messages) < 5:
+            logger.debug(f"[{LogCategory.FLOW}] History too short ({len(conv_state.recent_messages)} messages), skipping summarization")
+            return {
+                **state,
+                "conversation_state": conv_state,
+                "next_node": "finalize_response"
+            }
+        
+        try:
+            # Import Gemini client for summarization
+            import json
+            from .gemini_client import GeminiClient
+            
+            # Initialize client
+            gemini_client = GeminiClient()
+            
+            # Check if API key is available
+            if not gemini_client.api_key:
+                logger.warning(f"[{LogCategory.FLOW}] Gemini API key not available, skipping LLM summarization")
+                self._create_fallback_summary(conv_state)
+                return {
+                    **state,
+                    "conversation_state": conv_state,
+                    "next_node": "finalize_response"
+                }
+            
+            # Prepare conversation history for summarization
+            conversation_text = "\n".join([
+                f"Turn {i+1}: {msg}" for i, msg in enumerate(conv_state.recent_messages)
+            ])
+            
+            # Build summarization prompt per §27 requirements
+            summarization_prompt = f"""Summarize this patient management conversation history into structured JSON format:
+
+Conversation:
+{conversation_text}
+
+Return JSON with these fields:
+- salient_patients: array of patient IDs mentioned or worked with
+- pending_action: current incomplete action (CREATE_PATIENT, UPDATE_PATIENT, etc. or NONE)
+- unresolved_fields: any missing patient fields still needed
+- last_result: brief description of the most recent successful operation or current state
+
+Keep summary concise and factual. Focus on patient management context only."""
+            
+            # Generate summary using Gemini
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            async def get_summary():
+                try:
+                    api_response = await gemini_client._call_gemini_api(summarization_prompt)
+                    
+                    # Extract text content from Gemini API response
+                    if 'candidates' in api_response and api_response['candidates']:
+                        candidate = api_response['candidates'][0]
+                        if 'content' in candidate and 'parts' in candidate['content']:
+                            parts = candidate['content']['parts']
+                            if parts and 'text' in parts[0]:
+                                return parts[0]['text']
+                    
+                    logger.warning(f"[{LogCategory.FLOW}] Unexpected API response format")
+                    return None
+                    
+                except Exception as e:
+                    logger.warning(f"[{LogCategory.FLOW}] Gemini summarization failed: {e}")
+                    return None
+            
+            if loop.is_running():
+                summary_result = asyncio.create_task(get_summary())
+                summary_response = summary_result.result() if hasattr(summary_result, 'result') else None
+            else:
+                summary_response = loop.run_until_complete(get_summary())
+            
+            if summary_response:
+                # Parse and validate summary
+                try:
+                    summary_data = json.loads(summary_response.strip())
+                    
+                    # Validate required fields
+                    required_fields = ['salient_patients', 'pending_action', 'unresolved_fields', 'last_result']
+                    if all(field in summary_data for field in required_fields):
+                        # Update history_summary with structured data
+                        conv_state.history_summary = json.dumps(summary_data)
+                        
+                        # Keep only the most recent message in the rolling window 
+                        # to make room for new messages while preserving immediate context
+                        if conv_state.recent_messages:
+                            last_message = conv_state.recent_messages[-1]
+                            conv_state.recent_messages.clear()
+                            conv_state.recent_messages.append(last_message)
+                        
+                        logger.info(f"[{LogCategory.FLOW}] ✅ History summarized successfully")
+                        logger.debug(f"[{LogCategory.FLOW}] Summary: salient_patients={summary_data.get('salient_patients', [])}, pending_action={summary_data.get('pending_action', 'NONE')}")
+                    else:
+                        logger.warning(f"[{LogCategory.FLOW}] Summary missing required fields, using fallback")
+                        self._create_fallback_summary(conv_state)
+                        
+                except json.JSONDecodeError as e:
+                    logger.warning(f"[{LogCategory.FLOW}] Failed to parse summary JSON: {e}, using fallback")
+                    self._create_fallback_summary(conv_state)
+                    
+            else:
+                # Fallback summarization without LLM
+                logger.info(f"[{LogCategory.FLOW}] Using fallback summarization")
+                self._create_fallback_summary(conv_state)
+                
+        except Exception as e:
+            logger.error(f"[{LogCategory.ERROR}] ❌ History summarization failed: {e}")
+            # Continue without summarization - not critical for functionality
+        
+        return {
+            **state,
+            "conversation_state": conv_state,
+            "next_node": "finalize_response"
+        }
+
+    def _create_fallback_summary(self, conv_state: ConversationState) -> None:
+        """Create simple fallback summary when Gemini is unavailable."""
+        import json
+        
+        # Simple structured fallback
+        fallback_summary = {
+            "salient_patients": [conv_state.selected_patient_id] if conv_state.selected_patient_id else [],
+            "pending_action": conv_state.pending_action.name if conv_state.pending_action != PendingAction.NONE else "NONE",
+            "unresolved_fields": list(conv_state.pending_fields),
+            "last_result": f"Last intent: {conv_state.intent.name}" if conv_state.intent != Intent.UNKNOWN else "No recent activity"
+        }
+        
+        conv_state.history_summary = json.dumps(fallback_summary)
+        
+        # Keep last 2 messages for minimal context
+        if len(conv_state.recent_messages) > 2:
+            recent = list(conv_state.recent_messages)[-2:]
+            conv_state.recent_messages.clear()
+            for msg in recent:
+                conv_state.recent_messages.append(msg)
+
+    def finalize_response_node(self, state: GraphState) -> GraphState:
+        """
+        Node 16: Final response formatting and PII masking validation (Phase 15).
+        
+        Consistent response formatting per §25 and final PII masking validation.
+        Exit point for all conversation flows per §24.1.
+        """
+        conv_state = state["conversation_state"]
+        agent_response = state.get("agent_response", "")
+        
+        logger.info(f"[{LogCategory.FLOW}] 🎯 Finalizing response")
+        
+        if not agent_response:
+            logger.warning(f"[{LogCategory.ERROR}] ⚠️ No agent response to finalize")
+            agent_response = "I apologize, but I couldn't process your request. Please try again."
+        
+        # Apply response templates per §25 for consistent formatting
+        finalized_response = self._apply_response_templates(agent_response, state)
+        
+        # Final PII masking validation - ensure no unmasked NRICs leak through
+        finalized_response = self._enforce_pii_masking(finalized_response, conv_state)
+        
+        # Add conversation context if available
+        finalized_response = self._add_contextual_footer(finalized_response, conv_state)
+        
+        # Log final response (with PII masked for logs)
+        logged_response = self._mask_for_logging(finalized_response)
+        logger.info(f"[{LogCategory.SUCCESS}] ✅ Response finalized: '{logged_response[:100]}...'")
+        
+        return {
+            **state,
+            "agent_response": finalized_response,
+            "conversation_state": conv_state,
+            "next_node": "end",
+            "should_end": True
+        }
+
+    def _apply_response_templates(self, response: str, state: GraphState) -> str:
+        """Apply consistent response templates per §25."""
+        conv_state = state["conversation_state"]
+        tool_result = state.get("tool_result")
+        
+        # Handle DELETE_PATIENT template separately (no data expected)
+        if tool_result and tool_result.success and conv_state.intent == Intent.DELETE_PATIENT:
+            patient_id = conv_state.validated_fields.get('patient_id', 'Unknown')
+            return f"✅ Deleted patient #{patient_id}."
+        
+        # If we have a tool result and it was successful, apply template formatting
+        if tool_result and tool_result.success and tool_result.data:
+            intent = conv_state.intent
+            
+            if intent == Intent.CREATE_PATIENT and isinstance(tool_result.data, dict):
+                # Patient Creation Success template per §25
+                patient_data = tool_result.data
+                patient_id = patient_data.get('id', 'Unknown')
+                first_name = patient_data.get('first_name', '')
+                last_name = patient_data.get('last_name', '')
+                nric = patient_data.get('nric', '')
+                
+                template_response = f"✅ Created patient #{patient_id}: {first_name} {last_name} (NRIC {mask_nric(nric)})."
+                
+                # Add optional fields if provided
+                optional_parts = []
+                if patient_data.get('date_of_birth'):
+                    optional_parts.append(f"DOB: {patient_data['date_of_birth']}")
+                if patient_data.get('contact_no'):
+                    optional_parts.append(f"Contact: {patient_data['contact_no']}")
+                if patient_data.get('details'):
+                    optional_parts.append(f"Details: {patient_data['details']}")
+                
+                if optional_parts:
+                    template_response += f"\n{', '.join(optional_parts)}"
+                
+                return template_response
+                
+            elif intent == Intent.UPDATE_PATIENT and isinstance(tool_result.data, dict):
+                # Patient Update Success template per §25  
+                patient_data = tool_result.data
+                patient_id = patient_data.get('id', conv_state.validated_fields.get('patient_id', 'Unknown'))
+                
+                # Determine what fields were updated
+                updated_fields = [k for k in conv_state.validated_fields.keys() 
+                                if k != 'patient_id' and conv_state.validated_fields[k] is not None]
+                
+                field_list = ', '.join([field.replace('_', ' ').title() for field in updated_fields])
+                
+                return f"✅ Updated patient #{patient_id}: changed {field_list}."
+        
+        # Return original response if no template applies
+        return response
+
+    def _enforce_pii_masking(self, response: str, conv_state: ConversationState) -> str:
+        """Enforce PII masking rules - ensure no unmasked NRICs appear."""
+        import re
+        
+        # Pattern for Singapore NRIC
+        nric_pattern = r'\b[STFG]\d{7}[A-Z]\b'
+        
+        # Find all potential NRICs in the response
+        found_nrics = re.findall(nric_pattern, response)
+        
+        if found_nrics:
+            logger.warning(f"[{LogCategory.ERROR}] ⚠️ Found {len(found_nrics)} unmasked NRICs in response")
+            
+            # Replace with masked versions
+            for nric in found_nrics:
+                masked = mask_nric(nric)
+                response = response.replace(nric, masked)
+                logger.info(f"[{LogCategory.FLOW}] Masked NRIC {nric[:1]}***{nric[-1:]} -> {masked}")
+        
+        return response
+
+    def _add_contextual_footer(self, response: str, conv_state: ConversationState) -> str:
+        """Add helpful contextual information to response when appropriate."""
+        # Add guidance for pending workflows
+        if conv_state.pending_action != PendingAction.NONE and not conv_state.confirmation_required:
+            footer = "\n\nℹ️ *You can say 'cancel' at any time to reset.*"
+            if footer not in response:
+                response += footer
+        
+        return response
+
+    def _mask_for_logging(self, text: str) -> str:
+        """Mask any PII in text before logging."""
+        import re
+        
+        # Mask any NRICs that might appear
+        nric_pattern = r'\b[STFG]\d{7}[A-Z]\b'
+        masked_text = re.sub(nric_pattern, lambda m: mask_nric(m.group()), text)
+        
+        return masked_text
+
     def handle_cancellation_node(self, state: GraphState) -> GraphState:
         """
-        Node 15: Handle user cancellation/reset commands.
+        Node: Handle user cancellation/reset commands.
         Phase 8: Cancellation command handling.
         """
         conv_state = state["conversation_state"]
@@ -1461,8 +1869,8 @@ Please let me know how I can assist you with patient management."""
             **state,
             "agent_response": response,
             "conversation_state": conv_state,
-            "next_node": "end",
-            "should_end": False
+            "should_end": False,  # Conversation continues after cancellation
+            "next_node": "finalize_response"  # Route to finalization
         }
 
     def _determine_next_node_from_intent(self, intent: Intent) -> str:
@@ -1507,13 +1915,14 @@ class ConversationGraph:
         logger.info("[GRAPH] 🕸️ Conversation graph initialized")
 
     def _build_graph(self):
-        """Build and configure the conversation graph."""
+        """Build and configure the conversation graph with all 16 nodes per Phase 15."""
         
         # Create state graph
         workflow = StateGraph(GraphState)
         
-        # Add all nodes
-        workflow.add_node("classify_intent", self.nodes.classify_intent_node)
+        # Add all nodes (Phase 15: Complete 16-node implementation)
+        workflow.add_node("ingest_user_message", self.nodes.ingest_user_message_node)      # Node 1
+        workflow.add_node("classify_intent", self.nodes.classify_intent_node)               # Node 2
         workflow.add_node("create_patient", self.nodes.create_patient_node)
         workflow.add_node("execute_create_patient", self.nodes.execute_create_patient_node)
         workflow.add_node("update_patient", self.nodes.update_patient_node)
@@ -1524,15 +1933,28 @@ class ConversationGraph:
         workflow.add_node("get_patient_details", self.nodes.get_patient_details_node)
         workflow.add_node("get_scan_results", self.nodes.get_scan_results_node)
         workflow.add_node("provide_stl_links", self.nodes.provide_stl_links_node)
-        workflow.add_node("show_more_scans", self.nodes.show_more_scans_node)  # Phase 9: Pagination
-        workflow.add_node("provide_depth_maps", self.nodes.provide_depth_maps_node)  # Phase 9: Depth maps
-        workflow.add_node("provide_agent_stats", self.nodes.provide_agent_stats_node)  # Phase 10: Agent statistics
+        workflow.add_node("show_more_scans", self.nodes.show_more_scans_node)               # Phase 9: Pagination
+        workflow.add_node("provide_depth_maps", self.nodes.provide_depth_maps_node)        # Phase 9: Depth maps
+        workflow.add_node("provide_agent_stats", self.nodes.provide_agent_stats_node)      # Phase 10: Agent statistics
         workflow.add_node("handle_confirmation", self.nodes.handle_confirmation_node)
         workflow.add_node("unknown_intent", self.nodes.unknown_intent_node)
-        workflow.add_node("handle_cancellation", self.nodes.handle_cancellation_node)  # Phase 8: Cancellation handler
+        workflow.add_node("handle_cancellation", self.nodes.handle_cancellation_node)
+        workflow.add_node("summarize_history", self.nodes.summarize_history_node)          # Node 15: Phase 15
+        workflow.add_node("finalize_response", self.nodes.finalize_response_node)          # Node 16: Phase 15
         
-        # Set entry point - check for pending confirmations first
-        workflow.set_entry_point("classify_intent")
+        # Set entry point - all conversations start with message ingestion (Phase 15)
+        workflow.set_entry_point("ingest_user_message")
+        
+        # Phase 15: New routing from ingest_user_message
+        workflow.add_conditional_edges(
+            "ingest_user_message",
+            self._route_from_ingest_message,
+            {
+                "classify_intent": "classify_intent",
+                "handle_cancellation": "handle_cancellation",
+                "end": END
+            }
+        )
         
         # Add conditional routing from classify_intent
         workflow.add_conditional_edges(
@@ -1549,7 +1971,7 @@ class ConversationGraph:
                 "provide_depth_maps": "provide_depth_maps",  # Phase 9: Depth map routing
                 "provide_agent_stats": "provide_agent_stats",  # Phase 10: Agent stats routing
                 "handle_confirmation": "handle_confirmation",
-                "handle_cancellation": "handle_cancellation",  # Phase 8: Cancellation routing
+                "handle_cancellation": "handle_cancellation",
                 "unknown_intent": "unknown_intent"
             }
         )
@@ -1560,7 +1982,7 @@ class ConversationGraph:
             self._route_from_create_patient,
             {
                 "execute_create_patient": "execute_create_patient",
-                "end": END
+                "finalize_response": "finalize_response"  # Phase 15: Route to finalization
             }
         )
         
@@ -1570,16 +1992,16 @@ class ConversationGraph:
             self._route_from_update_patient,
             {
                 "execute_update_patient": "execute_update_patient",
-                "end": END
+                "finalize_response": "finalize_response"  # Phase 15: Route to finalization
             }
         )
         
-        # Add conditional routing from delete_patient (goes to confirmation or execution)
+        # Add conditional routing from delete_patient (goes to confirmation or finalization)
         workflow.add_conditional_edges(
             "delete_patient", 
             self._route_from_delete_patient,
             {
-                "end": END
+                "finalize_response": "finalize_response"  # Phase 15: Route to finalization
             }
         )
         
@@ -1590,24 +2012,130 @@ class ConversationGraph:
             {
                 "execute_delete_patient": "execute_delete_patient",
                 "provide_stl_links": "provide_stl_links",
-                "end": END
+                "finalize_response": "finalize_response"  # Phase 15: Route to finalization
             }
         )
         
-        # All execution and terminal nodes end the conversation
-        workflow.add_edge("execute_create_patient", END)
-        workflow.add_edge("execute_update_patient", END)
-        workflow.add_edge("execute_delete_patient", END)
-        workflow.add_edge("list_patients", END)
-        workflow.add_edge("get_patient_details", END)
-        workflow.add_edge("get_scan_results", END)
-        workflow.add_edge("provide_stl_links", END)
-        workflow.add_edge("show_more_scans", END)  # Phase 9: Pagination endpoint
-        workflow.add_edge("provide_depth_maps", END)  # Phase 9: Depth maps endpoint
-        workflow.add_edge("provide_agent_stats", END)  # Phase 10: Agent stats endpoint
-        workflow.add_edge("unknown_intent", END)
+        # Phase 15: All execution and terminal nodes check for summarization need then finalize
+        workflow.add_conditional_edges(
+            "execute_create_patient",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "execute_update_patient", 
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "execute_delete_patient",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history", 
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "list_patients",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "get_patient_details",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "get_scan_results",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "provide_stl_links",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "show_more_scans",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history", 
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "provide_depth_maps",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "provide_agent_stats",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "unknown_intent",
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "handle_cancellation", 
+            self._route_to_summarization_check,
+            {
+                "summarize_history": "summarize_history",
+                "finalize_response": "finalize_response"
+            }
+        )
+        
+        # Phase 15: Summarization always leads to finalization
+        workflow.add_edge("summarize_history", "finalize_response")
+        
+        # Phase 15: Finalization is the final exit point
+        workflow.add_edge("finalize_response", END)
         
         return workflow.compile()
+
+    def _route_from_ingest_message(self, state: GraphState) -> str:
+        """Route from ingest_user_message node based on next_node."""
+        return state.get("next_node") or "classify_intent"
 
     def _route_from_classify_intent(self, state: GraphState) -> str:
         """Route from classify_intent node based on next_node or confirmation state."""
@@ -1621,19 +2149,36 @@ class ConversationGraph:
 
     def _route_from_create_patient(self, state: GraphState) -> str:
         """Route from create_patient node based on next_node."""
-        return state.get("next_node") or "end"
+        next_node = state.get("next_node") or "finalize_response"
+        return "finalize_response" if next_node == "end" else next_node
 
     def _route_from_update_patient(self, state: GraphState) -> str:
         """Route from update_patient node based on next_node."""
-        return state.get("next_node") or "end"
+        next_node = state.get("next_node") or "finalize_response"
+        return "finalize_response" if next_node == "end" else next_node
 
     def _route_from_delete_patient(self, state: GraphState) -> str:
-        """Route from delete_patient node (always ends to wait for confirmation)."""
-        return "end"
+        """Route from delete_patient node (always to finalization)."""
+        return "finalize_response"
 
     def _route_from_confirmation(self, state: GraphState) -> str:
         """Route from handle_confirmation node based on next_node."""
-        return state.get("next_node") or "end"
+        next_node = state.get("next_node") or "finalize_response"
+        return "finalize_response" if next_node == "end" else next_node
+
+    def _route_to_summarization_check(self, state: GraphState) -> str:
+        """
+        Check if conversation history needs summarization (>5 turns).
+        Route to summarize_history if needed, otherwise to finalize_response.
+        """
+        conv_state = state["conversation_state"]
+        
+        # Check if we need to summarize (>5 messages and no recent summary)
+        if len(conv_state.recent_messages) >= 5:
+            logger.debug(f"[{LogCategory.FLOW}] History at capacity ({len(conv_state.recent_messages)} messages), routing to summarization")
+            return "summarize_history"
+        
+        return "finalize_response"
 
     async def process_message(self, user_message: str, conversation_state: ConversationState) -> Tuple[str, ConversationState]:
         """
@@ -1648,7 +2193,7 @@ class ConversationGraph:
         """
         logger.info(f"[GRAPH] 🚀 Processing message: '{user_message[:50]}...'")
         
-        # Create initial graph state
+        # Create initial graph state (Phase 15: starts with ingest_user_message)
         initial_state: GraphState = {
             "user_message": user_message,
             "agent_response": "",
@@ -1661,7 +2206,7 @@ class ConversationGraph:
         }
         
         try:
-            # Run the graph
+            # Run the graph (entry point is now ingest_user_message per Phase 15)
             final_state = await self.graph.ainvoke(initial_state)
             
             # Extract results
@@ -1678,12 +2223,25 @@ class ConversationGraph:
         except Exception as e:
             logger.error(f"[GRAPH] ❌ Error processing message: {e}")
             
-            # Return error response
+            # Return error response with finalization
             error_response = f"❌ I encountered an error processing your request: {e}"
-            # Store error in last_tool_error instead of non-existent fields
+            
+            # Apply basic finalization to error response
+            finalized_error = self._apply_basic_finalization(error_response, conversation_state)
+            
+            # Store error in last_tool_error
             conversation_state.last_tool_error = {"error": str(e), "timestamp": datetime.now().isoformat()}
             
-            return error_response, conversation_state
+            return finalized_error, conversation_state
+
+    def _apply_basic_finalization(self, response: str, conv_state: ConversationState) -> str:
+        """Apply basic finalization when graph execution fails."""
+        # Ensure PII masking even for error responses
+        import re
+        nric_pattern = r'\b[STFG]\d{7}[A-Z]\b'
+        masked_response = re.sub(nric_pattern, lambda m: mask_nric(m.group()), response)
+        
+        return masked_response
 
     def process_message_sync(self, user_message: str, conversation_state: ConversationState) -> Tuple[str, ConversationState]:
         """

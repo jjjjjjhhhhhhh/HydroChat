@@ -8,6 +8,7 @@ import { LoginScreen, SignUpScreen } from './src/screens/auth';
 import { PatientsListScreen, NewPatientFormScreen, PatientDetailScreen, ScanResultsScreen } from './src/screens/patients';
 import { CameraScreen, PhotoPreviewScreen } from './src/screens/scanning';
 import { ProcessingScreen, WoundDetectionScreen, DepthDetectionScreen, MeshDetectionScreen, DownloadFilesScreen, CroppedOriginalScreen } from './src/screens/ai-processing';
+import { HydroChatScreen } from './src/screens/hydrochat';
 
 const Stack = createNativeStackNavigator();
 
@@ -20,6 +21,7 @@ export default function App() {
           <Stack.Screen name="Sign Up" component={SignUpScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Patients List" component={PatientsListScreen} options={{ headerShown: false }} />
           <Stack.Screen name="New Patient Form" component={NewPatientFormScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="HydroChat" component={HydroChatScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Camera Page" component={CameraScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Patient Detail" component={PatientDetailScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Photo Preview" component={PhotoPreviewScreen} options={{ headerShown: false }} />

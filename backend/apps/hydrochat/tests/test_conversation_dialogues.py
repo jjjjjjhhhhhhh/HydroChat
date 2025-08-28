@@ -50,7 +50,7 @@ class TestConversationDialogues:
                 
                 # Verify the system prompts for NRIC
                 assert "NRIC" in response1
-                assert "S1234567A" in response1  # Example format shown
+                assert "S******7A" in response1  # Example format shown (masked for PII protection)
                 assert state1.pending_action == PendingAction.CREATE_PATIENT
                 assert "nric" in state1.pending_fields
                 assert state1.clarification_loop_count == 1
@@ -148,7 +148,7 @@ class TestConversationDialogues:
                 assert "not sure what you'd like me to do" in response
                 assert "Create a patient" in response
                 assert "List patients" in response
-                assert "create patient John Doe with NRIC S1234567A" in response  # Example
+                assert "create patient John Doe with NRIC S******7A" in response  # Example (masked)
                 assert "show all patients" in response or "list patients" in response  # Example
                 
                 # Verify state updates
