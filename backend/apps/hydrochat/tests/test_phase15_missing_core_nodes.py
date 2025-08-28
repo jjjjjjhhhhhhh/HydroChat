@@ -18,13 +18,6 @@ from datetime import datetime
 from collections import deque
 import re
 
-import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
-import json
-from datetime import datetime
-from collections import deque
-import re
-
 from apps.hydrochat.conversation_graph import ConversationGraph, ConversationGraphNodes, GraphState
 from apps.hydrochat.state import ConversationState
 from apps.hydrochat.enums import Intent, PendingAction, ConfirmationType, DownloadStage
@@ -537,7 +530,9 @@ class TestPhase15MissingCoreNodes(unittest.TestCase):
             self.assertLessEqual(len(self.conv_state.recent_messages), 3)
             
             # Should proceed to finalization
-            self.assertEqual(result["next_node"], "finalize_response")    # ===== ROUTING AND STATE MANAGEMENT TESTS =====
+            self.assertEqual(result["next_node"], "finalize_response")
+    
+    # ===== ROUTING AND STATE MANAGEMENT TESTS =====
     
     def test_route_to_summarization_check(self):
         """Test routing logic for summarization check."""

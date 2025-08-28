@@ -15,7 +15,6 @@ from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 
 import httpx
-from dataclasses import dataclass, asdict
 
 from .enums import Intent
 

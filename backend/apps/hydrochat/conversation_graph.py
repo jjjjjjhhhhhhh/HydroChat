@@ -153,7 +153,22 @@ class ConversationGraphNodes:
                             needed_fields = ['patient_id', 'nric', 'first_name', 'last_name']
                         
                         if needed_fields:
-                            llm_fields = loop.run_until_complete(llm_extract_fields_fallback(user_message, needed_fields))
+                            # Use same async pattern as intent classification
+                            if loop.is_running():
+                                # If we're already in an async context, create a new task
+                                task = asyncio.create_task(llm_extract_fields_fallback(user_message, needed_fields))
+                                try:
+                                    # Use asyncio.run in thread pool to avoid blocking
+                                    import concurrent.futures
+                                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                                        future = executor.submit(asyncio.run, llm_extract_fields_fallback(user_message, needed_fields))
+                                        llm_fields = future.result(timeout=10)
+                                except Exception as e:
+                                    logger.warning(f"[{LogCategory.INTENT}] LLM field extraction task failed: {e}")
+                                    llm_fields = {}
+                            else:
+                                llm_fields = loop.run_until_complete(llm_extract_fields_fallback(user_message, needed_fields))
+                            
                             if llm_fields:
                                 extracted_fields.update(llm_fields)
                                 logger.info(f"[{LogCategory.INTENT}] 🔍 LLM extracted additional fields: {list(llm_fields.keys())}")
@@ -1631,8 +1646,15 @@ Keep summary concise and factual. Focus on patient management context only."""
                     return None
             
             if loop.is_running():
-                summary_result = asyncio.create_task(get_summary())
-                summary_response = summary_result.result() if hasattr(summary_result, 'result') else None
+                # Use thread pool executor for proper async handling
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    try:
+                        future = executor.submit(asyncio.run, get_summary())
+                        summary_response = future.result(timeout=10)
+                    except Exception as e:
+                        logger.warning(f"[{LogCategory.FLOW}] Async summary execution failed: {e}")
+                        summary_response = None
             else:
                 summary_response = loop.run_until_complete(get_summary())
             
