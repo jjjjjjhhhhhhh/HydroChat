@@ -470,7 +470,6 @@ Respond with ONLY a JSON object containing the extracted fields. Use null for mi
         self._initialized = False
         self._api_key = None
         self._model = None
-        self._temperature = None
 
 
 # Global client instance
