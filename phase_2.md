@@ -87,23 +87,386 @@ DEP: Phases 14-15 (LLM integration needed for API metrics, all nodes needed for 
 RISK: Metric storage explosion – implement retention policy; Performance overhead – batch metric updates; Alert fatigue – tune thresholds carefully.
 
 ## Phase 18 – Advanced State Management (Redis Option) (HydroChat.md §2 Future)
-D:
-- `redis_state_store.py`: Redis-backed conversation state persistence with same interface as ConversationStateStore
-- Configuration toggle: `USE_REDIS_STATE=true/false` environment variable per §16 config pattern
-- State serialization: Enhanced serialization handling complex objects (deque, enums, datetime) for Redis storage
-- Connection management: Redis connection pooling, health checks, failover to in-memory per resilience patterns
-- Migration utilities: State export/import between in-memory and Redis stores for deployment transitions
-- TTL and LRU policies: Redis-native expiration and eviction aligned with in-memory behavior
-- Backward compatibility: Same interface as existing ConversationStateStore for drop-in replacement
-EC:
-- Test: Redis store maintains same behavior as in-memory store for all operations
-- Test: Graceful fallback to in-memory when Redis unavailable with proper logging
-- Test: State serialization round-trip preserves all field types (deque maxlen, enum values, datetime)
-- Test: Connection pooling handles multiple concurrent conversations efficiently
-- Load test: 100 concurrent conversations with Redis backend maintaining <2s response times
-- Test: TTL and LRU eviction policies work correctly in Redis context
-DEP: Phase 16 completion (stable state management needed)
-RISK: Redis dependency – make optional with clear fallback; Serialization bugs – comprehensive round-trip tests; Connection failures – implement circuit breaker pattern.
+
+### Implementation Overview
+Implement **optional** Redis-backed conversation state management as an alternative to in-memory storage, enabling distributed HydroChat deployments with persistent conversation state across server restarts and load-balanced instances.
+
+### D: Deliverables
+
+#### 1. Redis Configuration Module (`backend/config/redis_config.py`)
+**Purpose**: Centralized Redis connection management with health checks and failover
+**Key Components**:
+```python
+class RedisConfig:
+    """Redis configuration with connection pooling"""
+    # Environment variables
+    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+    USE_REDIS_STATE = os.getenv("USE_REDIS_STATE", "false").lower() == "true"
+    
+    @classmethod
+    def get_client(cls) -> Redis:
+        """Get or create Redis client with connection pool"""
+        # Lazy initialization with health check
+        # Connection pool with configurable max connections
+        # Proper error handling for connection failures
+    
+    @classmethod
+    def health_check(cls) -> bool:
+        """Perform Redis health check with ping"""
+        # Return True if Redis available, False otherwise
+        # Log warnings on failure for monitoring
+```
+
+**Features**:
+- Connection pooling (default: 50 max connections)
+- Health check interval (default: 30 seconds)
+- Configurable timeouts (socket_timeout: 5s, connect_timeout: 5s)
+- Decode responses to strings (decode_responses=True)
+- Graceful error handling with proper logging
+
+#### 2. Redis State Store (`backend/apps/hydrochat/redis_state_store.py`)
+**Purpose**: Redis-backed implementation of ConversationStateStore interface
+**Key Components**:
+```python
+class RedisStateStore:
+    """Redis-backed conversation state storage"""
+    
+    def __init__(self, redis_client: Redis, ttl_seconds: int = 7200):
+        self.redis = redis_client
+        self.ttl = ttl_seconds  # 2 hours default
+    
+    def save_state(self, conversation_id: str, state: ConversationState):
+        """Save conversation state to Redis with TTL"""
+        # Serialize state with custom encoder
+        # Store with conversation_id as key
+        # Set TTL for automatic expiration
+    
+    def load_state(self, conversation_id: str) -> ConversationState:
+        """Load conversation state from Redis"""
+        # Retrieve JSON from Redis
+        # Deserialize with custom decoder
+        # Return ConversationState object
+    
+    def delete_state(self, conversation_id: str):
+        """Delete conversation state"""
+        # Remove key from Redis
+    
+    def exists(self, conversation_id: str) -> bool:
+        """Check if conversation exists"""
+        # Check Redis key existence
+```
+
+**Interface Compatibility**: Same methods as `ConversationStateStore` for drop-in replacement
+
+#### 3. State Serialization Handler (`backend/apps/hydrochat/serialization.py`)
+**Purpose**: Custom JSON encoder/decoder for complex Python objects
+**Critical for**:
+- `deque` with maxlen preservation
+- `Enum` values (Intent, RoutingToken, etc.)
+- `datetime` objects
+- Nested Pydantic models
+
+**Implementation**:
+```python
+class StateEncoder(json.JSONEncoder):
+    """Custom JSON encoder for conversation state"""
+    def default(self, obj):
+        if isinstance(obj, deque):
+            return {
+                "__type__": "deque",
+                "items": list(obj),
+                "maxlen": obj.maxlen
+            }
+        elif isinstance(obj, Enum):
+            return {
+                "__type__": "enum",
+                "value": obj.value,
+                "class": obj.__class__.__name__
+            }
+        elif isinstance(obj, datetime):
+            return {
+                "__type__": "datetime",
+                "isoformat": obj.isoformat()
+            }
+        return super().default(obj)
+
+def state_decoder(dct):
+    """Custom JSON decoder for conversation state"""
+    if "__type__" in dct:
+        if dct["__type__"] == "deque":
+            return deque(dct["items"], maxlen=dct["maxlen"])
+        elif dct["__type__"] == "enum":
+            enum_class = globals()[dct["class"]]
+            return enum_class(dct["value"])
+        elif dct["__type__"] == "datetime":
+            return datetime.fromisoformat(dct["isoformat"])
+    return dct
+```
+
+#### 4. LangGraph Redis Integration (`conversation_graph.py` enhancement)
+**Purpose**: Integrate LangGraph checkpoint system with Redis
+**Implementation**:
+```python
+from langgraph.checkpoint.redis import RedisSaver
+
+def compile_conversation_graph(use_redis: bool = False):
+    """Compile conversation graph with optional Redis checkpointing"""
+    graph_builder = StateGraph(ConversationState)
+    # ... add nodes and edges ...
+    
+    if use_redis and RedisConfig.USE_REDIS_STATE:
+        # Use Redis-backed checkpointing
+        redis_saver = RedisSaver.from_conn_string(
+            f"redis://{RedisConfig.REDIS_HOST}:{RedisConfig.REDIS_PORT}"
+        )
+        return graph_builder.compile(checkpointer=redis_saver)
+    else:
+        # Use in-memory checkpointing
+        from langgraph.checkpoint.memory import MemorySaver
+        return graph_builder.compile(checkpointer=MemorySaver())
+```
+
+**Benefits**:
+- Automatic state persistence across server restarts
+- State sharing across load-balanced instances
+- Built-in checkpoint management
+- Thread-safe operations
+
+#### 5. Failover Logic (`backend/apps/hydrochat/state_manager.py`)
+**Purpose**: Graceful fallback when Redis unavailable
+**Implementation Pattern**:
+```python
+class StateManager:
+    """Manages conversation state with failover support"""
+    
+    def __init__(self):
+        self.use_redis = RedisConfig.USE_REDIS_STATE
+        self.redis_available = False
+        
+        if self.use_redis:
+            try:
+                self.redis_available = RedisConfig.health_check()
+                if self.redis_available:
+                    self.store = RedisStateStore(RedisConfig.get_client())
+                    logger.info("✅ Using Redis state storage")
+                else:
+                    logger.warning("⚠️ Redis unavailable, using in-memory fallback")
+                    self.store = InMemoryStateStore()
+            except Exception as e:
+                logger.error(f"❌ Redis initialization failed: {e}")
+                self.store = InMemoryStateStore()
+        else:
+            self.store = InMemoryStateStore()
+            logger.info("📝 Using in-memory state storage")
+```
+
+#### 6. Configuration Management
+**Environment Variables** (add to `backend/.env`):
+```bash
+# Redis State Management (Phase 18)
+USE_REDIS_STATE=false  # Toggle Redis usage
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=  # Optional password
+REDIS_MAX_CONNECTIONS=50
+REDIS_SOCKET_TIMEOUT=5
+REDIS_SOCKET_CONNECT_TIMEOUT=5
+REDIS_HEALTH_CHECK_INTERVAL=30
+REDIS_STATE_TTL=7200  # 2 hours in seconds
+```
+
+**Django Settings Integration** (`backend/config/settings/base.py`):
+```python
+# Redis Configuration
+REDIS_ENABLED = os.getenv('USE_REDIS_STATE', 'false').lower() == 'true'
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+REDIS_DB = int(os.getenv('REDIS_DB', '0'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_STATE_TTL = int(os.getenv('REDIS_STATE_TTL', '7200'))
+```
+
+#### 7. Migration Utilities (`backend/apps/hydrochat/state_migration.py`)
+**Purpose**: Tools for migrating state between storage backends
+**Commands**:
+```python
+def export_in_memory_to_redis():
+    """Export all in-memory conversations to Redis"""
+    # Iterate through in-memory store
+    # Serialize and save to Redis with TTL
+    
+def import_redis_to_in_memory():
+    """Import Redis conversations to in-memory (testing/debugging)"""
+    # Scan Redis keys matching conversation pattern
+    # Load and store in memory
+    
+def clear_expired_redis_states():
+    """Cleanup utility for expired conversation states"""
+    # Manual TTL enforcement if needed
+```
+
+### EC: Exit Criteria
+
+#### Functional Tests:
+1. **Redis Operations Parity**:
+   ```python
+   def test_redis_store_operations():
+       # save_state, load_state, delete_state, exists
+       # Assert same behavior as in-memory store
+   ```
+
+2. **Graceful Fallback**:
+   ```python
+   def test_redis_unavailable_fallback():
+       # Mock Redis connection failure
+       # Verify fallback to in-memory
+       # Check proper warning logging
+   ```
+
+3. **State Serialization Round-Trip**:
+   ```python
+   def test_state_serialization_integrity():
+       # Create state with deque, enums, datetime
+       # Serialize to JSON
+       # Deserialize back
+       # Assert all fields preserved exactly
+   ```
+
+4. **Connection Pooling**:
+   ```python
+   def test_connection_pool_efficiency():
+       # Concurrent save/load operations (50 threads)
+       # Verify connection reuse
+       # Check pool stats
+   ```
+
+#### Performance Tests:
+5. **Concurrent Load Test**:
+   ```python
+   def test_100_concurrent_conversations():
+       # 100 parallel conversation threads
+       # Each saves/loads state to/from Redis
+       # Assert <2s response time maintained
+       # Monitor memory and connection usage
+   ```
+
+6. **TTL and Expiration**:
+   ```python
+   def test_ttl_expiration():
+       # Save state with TTL=5 seconds
+       # Verify state exists immediately
+       # Wait 6 seconds
+       # Verify state expired and removed
+   ```
+
+#### Integration Tests:
+7. **LangGraph Checkpoint Integration**:
+   ```python
+   def test_langgraph_redis_checkpointing():
+       # Compile graph with Redis checkpointer
+       # Run multi-step conversation
+       # Verify checkpoints saved to Redis
+       # Resume conversation from checkpoint
+   ```
+
+8. **State Migration**:
+   ```python
+   def test_state_export_import():
+       # Create in-memory states
+       # Export to Redis
+       # Clear in-memory
+       # Import from Redis
+       # Verify state integrity
+   ```
+
+### DEP: Dependencies
+- **Phase 16 completion**: Stable state management and routing needed before Redis integration
+- **Redis server installation**: Docker, WSL, or Windows binary
+- **Python packages**: `redis>=6.4.0`, `langgraph-checkpoint-redis>=0.1.2`
+
+### RISK: Risk Mitigation Strategies
+
+#### 1. **Redis Dependency Risk**
+**Risk**: Application becomes dependent on external Redis server
+**Mitigation**:
+- Make Redis **optional** with environment variable toggle
+- Implement robust fallback to in-memory storage
+- Health checks with automatic failover
+- Clear documentation for Redis setup/troubleshooting
+
+#### 2. **Serialization Bugs Risk**
+**Risk**: Complex objects (deque, enums) may not serialize correctly
+**Mitigation**:
+- Custom JSON encoder/decoder with comprehensive type handling
+- Round-trip serialization tests for all state field types
+- Validation after deserialization
+- Error logging for serialization failures
+
+#### 3. **Connection Failure Risk**
+**Risk**: Redis connection drops during conversation
+**Mitigation**:
+- Connection pooling with automatic reconnection
+- Circuit breaker pattern for repeated failures
+- Graceful degradation to in-memory mid-conversation
+- Retry logic with exponential backoff
+
+#### 4. **Performance Degradation Risk**
+**Risk**: Redis network latency impacts response times
+**Mitigation**:
+- Local Redis deployment (same server/network)
+- Connection pooling for reduced overhead
+- Performance benchmarking (<2s requirement)
+- Monitoring and alerting for slow operations
+
+#### 5. **Data Loss Risk**
+**Risk**: Redis memory-only storage loses data on crash
+**Mitigation**:
+- Configure Redis persistence (AOF or RDB)
+- Appropriate TTL values (default 2 hours)
+- Conversation state not critical (can restart conversation)
+- Backup important data to primary database
+
+### Implementation Sequence
+
+1. **Setup Phase** (Day 1):
+   - Install Redis server (Docker recommended)
+   - Add environment variables
+   - Test Redis connection
+
+2. **Core Implementation** (Day 2-3):
+   - Implement `RedisConfig` class
+   - Create `StateEncoder`/`state_decoder`
+   - Build `RedisStateStore` with interface compatibility
+
+3. **Integration Phase** (Day 4):
+   - LangGraph checkpoint integration
+   - Failover logic implementation
+   - State migration utilities
+
+4. **Testing Phase** (Day 5-6):
+   - Unit tests for serialization
+   - Integration tests with Redis
+   - Concurrency and load testing
+   - Performance benchmarking
+
+5. **Documentation Phase** (Day 7):
+   - Redis setup guide
+   - Configuration documentation
+   - Troubleshooting guide
+   - Migration procedures
+
+### Success Metrics
+- ✅ All tests passing (unit, integration, load)
+- ✅ <2s response time maintained with Redis
+- ✅ Graceful fallback verified
+- ✅ 100 concurrent conversations handled
+- ✅ State serialization 100% accurate
+- ✅ Zero data loss in round-trip tests
+- ✅ Documentation complete and clear
 
 ## Phase 19 – Advanced Scan Results & STL Security (HydroChat.md §19.2, §21)
 D:
