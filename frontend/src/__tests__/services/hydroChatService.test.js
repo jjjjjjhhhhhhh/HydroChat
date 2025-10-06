@@ -29,7 +29,8 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: 'test-uuid',
-        message: 'Hello'
+        message: 'Hello',
+        message_id: null
       });
 
       expect(result).toEqual(mockResponse.data);
@@ -51,7 +52,8 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: null,
-        message: 'Start chat'
+        message: 'Start chat',
+        message_id: null
       });
 
       expect(result).toEqual(mockResponse.data);
@@ -73,7 +75,8 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: 'test-uuid',
-        message: 'Hello world'
+        message: 'Hello world',
+        message_id: null
       });
     });
 

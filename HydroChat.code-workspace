@@ -1,0 +1,29 @@
+{
+  "folders": [
+    {
+      "name": "Root",
+      "path": "."
+    },
+    {
+      "name": "Frontend",
+      "path": "frontend"
+    }
+  ],
+  "settings": {
+    // Jest (Frontend) - Auto-detect from frontend workspace folder
+    "jest.runMode": "on-demand",
+    
+    // Pytest (Backend)
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": ["."],
+    "python.testing.cwd": "${workspaceFolder:Root}/backend"
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "orta.vscode-jest",
+      "hbenl.vscode-test-explorer"
+    ]
+  }
+}

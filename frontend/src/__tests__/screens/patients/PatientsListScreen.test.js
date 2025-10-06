@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, fireEvent, screen } from '@testing-library/react-native';
+import { render, fireEvent, screen, waitFor, act } from '@testing-library/react-native';
 import PatientsListScreen from '../../../screens/patients/PatientsListScreen';
 
 // Mock the patient service
@@ -40,15 +40,22 @@ describe('PatientsListScreen', () => {
   });
 
   describe('HydroChat Integration', () => {
-    it('should render chatbot button in header', () => {
+    it('should render chatbot button in header', async () => {
       render(<PatientsListScreen navigation={mockNavigation} route={mockRoute} />);
       
-      const chatbotButton = screen.getByLabelText('Open HydroChat');
-      expect(chatbotButton).toBeTruthy();
+      // Wait for async effects to complete
+      await waitFor(() => {
+        expect(screen.getByLabelText('Open HydroChat')).toBeTruthy();
+      });
     });
 
-    it('should navigate to HydroChat when chatbot button is pressed', () => {
+    it('should navigate to HydroChat when chatbot button is pressed', async () => {
       render(<PatientsListScreen navigation={mockNavigation} route={mockRoute} />);
+      
+      // Wait for component to be ready
+      await waitFor(() => {
+        expect(screen.getByLabelText('Open HydroChat')).toBeTruthy();
+      });
       
       const chatbotButton = screen.getByLabelText('Open HydroChat');
       fireEvent.press(chatbotButton);
@@ -56,8 +63,13 @@ describe('PatientsListScreen', () => {
       expect(mockNavigation.navigate).toHaveBeenCalledWith('HydroChat');
     });
 
-    it('should still render the add patient button', () => {
+    it('should still render the add patient button', async () => {
       render(<PatientsListScreen navigation={mockNavigation} route={mockRoute} />);
+      
+      // Wait for component to be ready
+      await waitFor(() => {
+        expect(screen.getByText('Patients Directory')).toBeTruthy();
+      });
       
       // The add button doesn't have an explicit test ID, but we can verify navigation behavior
       // when testing the "New Patient Form" navigation
@@ -66,8 +78,13 @@ describe('PatientsListScreen', () => {
   });
 
   describe('Header Layout', () => {
-    it('should render both add and chatbot buttons', () => {
+    it('should render both add and chatbot buttons', async () => {
       render(<PatientsListScreen navigation={mockNavigation} route={mockRoute} />);
+      
+      // Wait for component to be ready
+      await waitFor(() => {
+        expect(screen.getByText('Patients Directory')).toBeTruthy();
+      });
       
       // Check that both buttons exist
       const chatbotButton = screen.getByLabelText('Open HydroChat');

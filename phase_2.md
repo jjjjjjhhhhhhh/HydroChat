@@ -68,23 +68,51 @@ RISK: Route explosion – keep map simple and data-driven; Maintenance burden �
 
 ## Phase 17 – Enhanced Metrics & Performance Monitoring (HydroChat.md §29, §22)
 D:
-- Extended `MetricsLogger`: LLM API call tracking, conversation flow timing, response latency monitoring
-- Performance benchmarks: Sub-2-second response time enforcement per §2 synchronous mode (excluding network)
+- **Gemini SDK Migration**: Migrate from manual `httpx` calls to official `google-genai` SDK (`google.genai.Client`) for accurate token counting and cost tracking
+  - Replace `gemini_client.py` httpx implementation with official SDK `client.models.generate_content()`
+  - Use `client.models.count_tokens()` for accurate token counting per official SDK docs
+  - Extract real token usage from API response metadata instead of estimates
+  - Update `GeminiUsageMetrics` to track actual tokens from `response.usage_metadata` field
+- Extended `MetricsLogger`: LLM API call tracking with **accurate token counts**, conversation flow timing, response latency monitoring
+- **Performance benchmarks**: Response time tracking decorator with <2s threshold enforcement per §2 synchronous mode (excluding network)
+  - Add `@track_response_time` decorator for conversation graph entry points
+  - Capture start/end timestamps for each conversation turn
+  - Log warnings when response time exceeds 2s threshold
 - Conversation analytics: Intent classification accuracy, user satisfaction indicators, error rate tracking
 - Alert thresholds: Error rate >20% warnings, excessive retry detection, performance degradation alerts
-- Dashboard data preparation: JSON export of metrics for external monitoring per §29
+- **Dashboard data preparation**: JSON export endpoint (`/api/hydrochat/metrics/export/`) for external monitoring per §29
+  - Developer-only endpoint using existing `generate_stats_summary()` 
+  - Returns comprehensive metrics in JSON format for dashboard consumption
 - Agent stats command: Developer-only access restrictions per §29 (not exposed to end-clinician)
 - Logging taxonomy enhancement: Performance timing logs, LLM interaction logs per §22
-- Metrics retention policy: Prevent metric storage explosion with configurable retention
+- **Metrics retention policy**: In-memory retention with TTL (max 1000 entries, 24h expiration, hourly cleanup)
+  - Configurable via `METRICS_MAX_ENTRIES` and `METRICS_TTL_HOURS` settings
+  - Manual cleanup task for expired entries
+  - Note: Persistent storage deferred to Phase 18 (Redis)
 EC:
-- Test: Performance benchmark fails if response time >2s (mocked network delays)
-- Test: LLM API metrics track successful/failed/retried calls with cost tracking
-- Test: Conversation analytics export includes accuracy percentages and error rates
-- Test: Agent stats command shows new metrics categories with proper access control
-- Test: Alert thresholds trigger warnings at configured levels (error rate >20%)
+- Test: Performance benchmark decorator tracks and warns on >2s response time (mocked network delays)
+- Test: Gemini SDK migration provides **accurate token counts** from API responses (not estimates)
+- Test: Token counting uses `client.models.count_tokens()` and validates against actual API usage
+- Test: LLM API metrics track successful/failed/retried calls with **real cost calculations** based on actual token usage
+- Test: Response time decorator captures timing for all conversation turns with proper logging
+- Test: Conversation analytics export includes accuracy percentages and error rates via JSON endpoint
+- Test: Agent stats command shows new metrics categories (token usage, response times) with proper access control
+- Test: Alert thresholds trigger warnings at configured levels (error rate >20%, retry count >5)
+- Test: Metrics retention policy correctly expires entries after 24h and enforces 1000-entry cap
+- Test: JSON export endpoint returns complete stats structure for dashboard integration
 - Integration: Stats command restricted to developer-only context per §29
-DEP: Phases 14-15 (LLM integration needed for API metrics, all nodes needed for flow timing)
-RISK: Metric storage explosion – implement retention policy; Performance overhead – batch metric updates; Alert fatigue – tune thresholds carefully.
+- Validation: Compare httpx baseline metrics vs SDK metrics to ensure parity after migration
+DEP: 
+- Phases 14-15 (LLM integration needed for API metrics, all nodes needed for flow timing)
+- Python package: `google-genai>=1.41.0` (already in requirements.txt, line 110)
+- Ensure `GEMINI_API_KEY` configured in environment per §16
+RISK: 
+- **SDK Migration**: Breaking changes from httpx → official SDK; Mitigation: Comprehensive test suite validates parity, maintain backward compatibility in metrics structure
+- **Token Tracking Accuracy**: SDK response structure may vary; Mitigation: Parse `response.usage_metadata.total_token_count` field with fallback to zero if missing
+- Metric storage explosion – implement retention policy with configurable TTL
+- Performance overhead – batch metric updates, use lightweight timing decorators
+- Alert fatigue – tune thresholds carefully based on production data
+- **Cost Tracking Precision**: Token-to-cost conversion uses fixed rates; Mitigation: Document rate assumptions, make configurable per model
 
 ## Phase 18 – Advanced State Management (Redis Option) (HydroChat.md §2 Future)
 
@@ -533,12 +561,17 @@ RISK: Accessibility complexity – focus on critical path first; Error boundary 
    - Validate all response templates match §25 specifications exactly
 
 3. **Performance & Load Tests** (Phases 16-17):
-   - Response time benchmarking with timing assertions (<2s per §2)
+   - **Response time benchmarking** with timing assertions (<2s per §2) using decorators
+   - **Token counting accuracy** validation using official SDK `client.models.count_tokens()`
+   - **Cost calculation tests** comparing estimated vs actual token usage from API responses
+   - **Metrics retention policy** tests (1000-entry cap, 24h TTL, hourly cleanup)
+   - **JSON export endpoint** validation for dashboard data structure
    - Concurrent conversation isolation (expand from current 10 to 50 threads)
    - Memory usage monitoring during extended conversations with leak detection
    - Metrics collection accuracy under load with proper retention policies
    - Graph routing performance with all 16 nodes under concurrent load
    - LLM API performance impact measurement and optimization
+   - **SDK migration validation** comparing httpx baseline vs official SDK metrics
 
 4. **State Management Tests** (Phase 18):
    - Redis state store round-trip serialization with complex objects (deque, enums, datetime)
@@ -574,8 +607,10 @@ RISK: Accessibility complexity – focus on critical path first; Error boundary 
 .\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_phase15_missing_nodes.py -v
 .\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_phase16_routing_validation.py -v
 
-# Performance benchmarking
+# Performance benchmarking (Phase 17)
 .\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_phase17_performance.py -v --benchmark
+.\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_phase17_sdk_migration.py -v
+.\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_phase17_metrics_retention.py -v
 
 # Concurrency testing (50 threads)
 .\.venv-win\Scripts\Activate.ps1; cd backend; pytest apps/hydrochat/tests/test_concurrency_enhanced.py -v
