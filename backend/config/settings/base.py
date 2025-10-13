@@ -119,3 +119,15 @@ CORS_ALLOWED_ORIGINS = [
     # Add other origins as needed, e.g., your frontend's production URL
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+# Redis Configuration (Phase 18)
+# Optional Redis-backed conversation state management
+# Requires Redis server running (Docker, WSL, or Windows binary)
+REDIS_ENABLED = os.getenv('USE_REDIS_STATE', 'false').lower() == 'true'
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+REDIS_DB = int(os.getenv('REDIS_DB', '0'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_STATE_TTL = int(os.getenv('REDIS_STATE_TTL', '7200'))  # 2 hours
+REDIS_MAX_CONNECTIONS = int(os.getenv('REDIS_MAX_CONNECTIONS', '50'))
+REDIS_SOCKET_TIMEOUT = int(os.getenv('REDIS_SOCKET_TIMEOUT', '5'))
