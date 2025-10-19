@@ -92,6 +92,8 @@ context.md
 Project directory.md
 GEMINI.md
 CLAUDE.md
+code_review.md
+HydroChat.md
 # Documentation & Media folders
 Documents/
 # docs/
@@ -100,6 +102,9 @@ MLIntegration/
 # Project backups
 backend/backup/
 backend/apps/scans/views_original_backup.py
+
+# Test configuration
+pytest.ini
 
 # Logs
 backend/logs
