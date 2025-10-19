@@ -11,14 +11,14 @@
 - [x] **Metrics Retention Policy**: In-memory retention with 1000-entry cap and 24h TTL
 - [x] **JSON Export Endpoint**: Dashboard data preparation endpoint for external monitoring
 - [x] **Alert Thresholds**: Error rate >20% warnings and excessive retry detection
-- [x] **Testing Coverage**: All 64 tests passing with complete Phase 17 functionality verification
+- [x] **Testing Coverage**: All 68 tests passing with complete Phase 17 functionality verification
 
 ### Test Statistics:
-- **Phase 17 Performance Tests**: 17 passing tests (response time tracking, metrics retention, alert thresholds)
+- **Phase 17 Performance Tests**: 21 passing tests (response time tracking, metrics retention, alert thresholds, async support)
 - **Phase 17 SDK Migration Tests**: 20 passing tests (token counting, cost calculation, API integration)
 - **Phase 17 Metrics Retention Tests**: 27 passing tests (TTL expiration, max entries, cleanup)
-- **Overall Phase 17 Tests**: 64 passing tests (100% success rate)
-- **Coverage**: Complete SDK migration, performance monitoring, and metrics retention
+- **Overall Phase 17 Tests**: 68 passing tests (100% success rate)
+- **Coverage**: Complete SDK migration, performance monitoring, metrics retention, and async decorator support
 - **Test Execution Time**: ~16 seconds for full Phase 17 suite
 
 ### Deliverables Implemented:

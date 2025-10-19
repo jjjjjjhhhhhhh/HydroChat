@@ -2,381 +2,13 @@
 
 Source Spec: `HydroChat.md` (authoritative). Based on Grok feedback analysis comparing phase.md implementation against original specification. Post-Phase 13 status: 80.13% coverage, 217 tests passing.
 
+**Note**: For code review improvements and refactoring changes, see [`code_review.md`](code_review.md).
+
 Legend:
 - D = Deliverables (artifacts produced)
 - EC = Exit Criteria (verifiable conditions to advance)
 - DEP = Dependencies (must be satisfied before starting)
 - RISK = Key risks / mitigations
-
----
-## API Design Decisions & Frontend/Backend Contracts
-
-### Message ID Idempotency Decision (2025-10-19)
-
-**Context**: Frontend Phase 16 implemented message retry logic with `message_id` parameter for client-side retry tracking. Initial implementation sent `message_id: null` in all API requests to `/api/hydrochat/converse/`.
-
-**Issue**: Backend API does not currently accept or use `message_id` parameter (see `backend/apps/hydrochat/views.py` lines 209-213). Sending undocumented parameters changes the interface contract and violates API specification.
-
-**Decision: Option 1 - Conditional Parameter Inclusion (YAGNI Principle)**
-
-**Rationale**:
-1. **YAGNI Compliance**: Backend idempotency tracking would be premature optimization without evidence of duplicate message problems in production
-2. **Conversational AI Resilience**: LLM-based conversations are naturally forgiving of duplicate prompts; most operations are read-heavy (GET patients, VIEW scans)
-3. **Confirmation Workflow Protection**: Write operations (CREATE/UPDATE/DELETE) require explicit user confirmation via state machine, providing natural deduplication
-4. **Clean API Contract**: Backend API specification remains minimal and well-documented
-5. **Frontend Retry Value Preserved**: Client-side retry logic (exponential backoff, attempt tracking, UX) remains functional without backend dependency
-
-**Implementation** (frontend/src/services/hydroChatService.js):
-```javascript
-// Build request payload - only include message_id if provided (non-null)
-const payload = {
-  conversation_id: conversationId,
-  message: message.trim(),
-};
-
-// Only include message_id if explicitly provided (for future backend idempotency support)
-if (messageId !== null && messageId !== undefined) {
-  payload.message_id = messageId;
-}
-
-await api.post('/hydrochat/converse/', payload);
-```
-
-**Current Behavior**:
-- Default calls: `sendMessage(convId, message)` → sends `{ conversation_id, message }` (no message_id)
-- Explicit ID: `sendMessage(convId, message, 'msg-123')` → sends `{ conversation_id, message, message_id: 'msg-123' }`
-- Frontend retry infrastructure (`retryMessage()`, `canRetryMessage()`) continues to work for UX and client-side state tracking
-
-**Future Migration Path** (if backend idempotency needed):
-1. Add `message_id` parameter to backend API (`backend/apps/hydrochat/views.py`)
-2. Implement in-memory processed message tracking with TTL (e.g., 5 minutes)
-3. Return cached response for duplicate `message_id` within TTL window
-4. Document parameter in API specification (HydroChat.md §API)
-5. Update tests to verify idempotency behavior
-6. Frontend already supports explicit message ID passing, no changes required
-
-**Alternative Considered: Option 2 - Backend Idempotency Implementation**
-- **Rejected**: Adds complexity (message ID storage, cleanup logic) without proven need
-- **Risk**: Over-engineering for problem that may never occur in practice
-- **Cost**: Development time, testing overhead, maintenance burden
-
-**References**:
-- Frontend Service: `frontend/src/services/hydroChatService.js` lines 28-39
-- Frontend Tests: `frontend/src/__tests__/services/hydroChatService.test.js` lines 30-99 (including conditional behavior test)
-- Backend API: `backend/apps/hydrochat/views.py` lines 205-314 (`ConverseAPIView.post()`)
-- Code Review: GitHub PR comment on lines +32 to +33 (Copilot suggestion)
-
-**Related Principles** (from project coding rules):
-- "No premature generalization (YAGNI)" ✓
-- "Simple solutions (KISS)" ✓
-- "Parse, Don't Validate" → API accepts minimal required fields ✓
-- "Keep instructions concise; expand only when genuinely required" ✓
-
-### Shared Test Utilities for Mock Management (2025-10-19)
-
-**Context**: Code review identified significant duplication in mock setup across HydroChat test files - identical 25+ line mock configurations repeated in multiple test files, violating DRY principle and increasing maintenance burden.
-
-**Issue**: Large inline mock implementations duplicated across `HydroChatRetry.test.js`, `HydroChatScreen.test.js`, and `HydroChatRetryFixed.test.js` (see lines 10-35 in HydroChatRetry.test.js).
-
-**Decision: Shared Test Utility Module with Hybrid Approach**
-
-**Implementation** (`frontend/src/__tests__/__setup__/mockServices.js`):
-Created centralized test utilities that provide:
-1. **Helper Functions** (used in `beforeEach`):
-   - `resetMockServiceState()` - Clean state between tests
-   - `setupHydroChatServiceMocks()` - Configure default behaviors
-2. **Reference Documentation** - Shows standard mock patterns (inline mocks still required by Jest)
-
-**Why Not Factory Functions?**
-Jest requires `jest.mock()` to receive an inline function - it cannot reference external variables or call imported functions. Attempted approach:
-```javascript
-// ❌ FAILS - Jest Error: "not allowed to reference any out-of-scope variables"
-jest.mock('../../../services', () => createMockServices());
-```
-
-**Final Approach - Hybrid Pattern:**
-```javascript
-// ✅ WORKS - Inline mock (Jest requirement) + shared utilities
-jest.mock('../../../services', () => ({
-  hydroChatService: {
-    maxRetryAttempts: 3,
-    retryDelayBase: 1000,
-    messageAttempts: new Map(),
-    messagesToRetry: new Map(),
-    sendMessage: jest.fn(),
-    // ... other methods
-  },
-}));
-
-describe('Tests', () => {
-  beforeEach(() => {
-    resetMockServiceState(mockService);  // ← Shared utility
-    setupHydroChatServiceMocks(mockService);  // ← Shared utility
-  });
-});
-```
-
-**Benefits Achieved:**
-1. **Reduced Duplication in `beforeEach`**: Setup logic centralized (previously 40+ lines, now 2-3 lines)
-2. **Simplified Inline Mocks**: Cleaner, more maintainable inline definitions
-3. **Consistent Mock Behavior**: All tests use same setup/reset patterns
-4. **Easier Updates**: Change mock behavior in one place (`mockServices.js`)
-
-**Limitations Accepted:**
-- Inline mock definitions still required per file (Jest constraint)
-- Cannot eliminate all duplication (inline mocks stay simple/short)
-
-**Files Modified:**
-- Created: `frontend/src/__tests__/__setup__/mockServices.js` (shared utilities)
-- Refactored: `HydroChatRetry.test.js` (beforeEach: 67 lines → 7 lines)
-- Refactored: `HydroChatScreen.test.js` (beforeEach: 12 lines → 7 lines)
-- Refactored: `HydroChatRetryFixed.test.js` (beforeEach: 27 lines → 15 lines)
-
-**Test Results:**
-- All 40 tests passing across 3 test suites ✓
-- No functional changes, pure refactoring ✓
-
-**Future Use:**
-Any new test files needing HydroChat service mocks should:
-1. Define inline `jest.mock()` with minimal structure (see existing tests as template)
-2. Import and use `resetMockServiceState()` and `setupHydroChatServiceMocks()` in `beforeEach()`
-3. Add any test-specific mock behaviors as needed
-
-**References:**
-- Shared Utilities: `frontend/src/__tests__/__setup__/mockServices.js`
-- Example Usage: `frontend/src/__tests__/screens/hydrochat/HydroChatScreen.test.js`
-- Code Review: GitHub PR comment (Copilot suggestion on lines +10 to +12)
-
-**Related Principles:**
-- "DRY (Don't Repeat Yourself)" ✓
-- "Extract shared logic to utilities" ✓
-- "Simple solutions (KISS)" → Accepted Jest constraints, didn't over-engineer ✓
-
-### Redis Configuration Redundancy Fix (2025-10-19)
-
-**Context**: Code review identified redundant expression in Redis configuration module.
-
-**Issue**: Line 43 in `backend/config/redis_config.py` contained redundant `or None`:
-```python
-'password': os.getenv('REDIS_PASSWORD', None) or None,
-```
-
-**Problem**: 
-- `os.getenv('REDIS_PASSWORD', None)` already returns `None` if the environment variable is not set or is empty
-- The `or None` suffix adds no value since `None or None` evaluates to `None`
-- Violates code clarity and simplicity principles
-
-**Solution**: Remove redundant `or None`:
-```python
-'password': os.getenv('REDIS_PASSWORD', None),
-```
-
-**Behavior**:
-- Before: `os.getenv('REDIS_PASSWORD', None) or None` → returns `None` if env var not set
-- After: `os.getenv('REDIS_PASSWORD', None)` → returns `None` if env var not set
-- **No functional change**, pure code cleanup ✓
-
-**Files Modified:**
-- `backend/config/redis_config.py` line 43
-
-**Related Principles:**
-- "Simple solutions (KISS)" ✓
-- "Avoid redundant code" ✓
-- Code clarity and readability ✓
-
-### Gemini Client SDK Migration (V1 → V2) (2025-10-19)
-
-**Context**: Phase 14 originally implemented Gemini integration using manual `httpx` HTTP calls (`gemini_client.py`). Phase 17 introduced official SDK implementation (`gemini_client_v2.py`) for accurate token tracking. Both files existed in codebase creating technical debt.
-
-**Issue**: Duplicate functionality across two files (534 lines each) with identical public API but different implementations. Maintenance burden, confusion about which to use, risk of divergence.
-
-**Decision: Migrate to V2 and Remove V1**
-
-**Rationale**:
-1. **V2 Strictly Superior**: Official `google-genai` SDK provides accurate token counts from `response.usage_metadata`, eliminating estimation
-2. **Better Maintainability**: SDK handles protocol changes, Google maintains it
-3. **Accurate Cost Tracking**: Real token breakdowns (prompt vs completion) enable precise cost calculations
-4. **No Functional Loss**: V2 implements all V1 capabilities plus improvements
-5. **Technical Debt**: Keeping both violates DRY and adds unnecessary complexity
-
-**Migration Steps:**
-
-1. **Updated All Imports** (5 files):
-   - `conversation_graph.py` line 1598: Import `GeminiClientV2 as GeminiClient`
-   - `intent_classifier.py` lines 158, 177: Import `classify_intent_fallback_v2`, `extract_fields_fallback_v2`
-   - `agent_stats.py` line 41: Import `get_gemini_metrics_v2 as get_gemini_metrics`
-   - `test_phase14_llm_integration.py`: Import all V2 functions with aliases
-
-2. **Added Missing Function**:
-   - Added `reset_gemini_client_v2()` to gemini_client_v2.py for test compatibility
-
-3. **Verification Results**:
-   - ✅ Public API works correctly (integration tests passing)
-   - ⚠️ Some V1-specific internal tests fail (expected - V2 has different architecture)
-   - ✅ Production code migrated successfully
-   - ⚠️ Tests need updating for V2's SDK-based implementation
-
-**Key Differences V1 vs V2:**
-
-| Aspect | V1 (httpx) | V2 (Official SDK) |
-|--------|-----------|-------------------|
-| HTTP Layer | Manual `httpx.AsyncClient` | `genai.Client.aio.models.generate_content()` |
-| Token Counting | ❌ Estimated (~100 tokens) | ✅ Actual from `response.usage_metadata` |
-| Token Breakdown | ❌ Single number | ✅ Prompt + Completion separate |
-| API Response | Manual JSON parsing | SDK Response objects |
-| Internal Methods | `_call_gemini_api()`, `_extract_json_response()` | `generate_content_with_tokens()`, `count_tokens()` |
-| Error Type | Custom `GeminiAPIError` | SDK `APIError` |
-| Model Default | `gemini-2.5-flash` | `gemini-2.0-flash-exp` |
-
-**Test Migration Status:**
-- ✅ **28/28 tests passing** (100% coverage maintained)
-- Updated tests to work with V2 SDK architecture:
-  - ✅ Fixed metrics parameter: `tokens=` → `total_tokens=`, `prompt_tokens=`, `completion_tokens=`
-  - ✅ Replaced `_call_gemini_api()` mocking with SDK's `generate_content_with_tokens()`
-  - ✅ Updated JSON extraction tests (SDK handles automatically via `response.text`)
-  - ✅ Fixed function patching: `classify_intent_fallback_v2`, `extract_fields_fallback_v2`
-  - ✅ Fixed markdown JSON test (used actual newlines vs escaped `\\n`)
-  - ✅ Error type: SDK's `APIError` compatible with test mocks
-
-**Post-Migration Plan:**
-1. ✅ Delete `gemini_client.py` (V1)
-2. ✅ Rename `gemini_client_v2.py` → `gemini_client.py`
-3. ✅ Update imports to remove `_v2` suffixes
-4. ✅ Update test mocks for V2 architecture (28/28 tests passing)
-5. ✅ Document this migration
-
-**Files Modified:**
-- Updated: `conversation_graph.py`, `intent_classifier.py`, `agent_stats.py`, `test_phase14_llm_integration.py`
-- Enhanced: `gemini_client_v2.py` (added `reset_gemini_client_v2()`)
-- To Delete: `gemini_client.py` (after this documentation)
-- To Rename: `gemini_client_v2.py` → `gemini_client.py`
-
-**Impact:**
-- ✅ **Production Code**: Fully migrated, using accurate token tracking
-- ✅ **Tests**: All 28/28 tests updated and passing
-- ✅ **Cost Tracking**: Now uses real API data per §29 requirements
-- ✅ **No Functional Regression**: All capabilities preserved
-
-**Migration Complete (2025-10-19):**
-1. ✅ All test mocks updated for SDK V2
-2. ✅ V1-specific tests replaced with V2 equivalents
-3. ✅ 28/28 tests passing
-4. 🔄 Next: Monitor token tracking accuracy and cost calculations in production
-
-**References:**
-- V1 Implementation: `backend/apps/hydrochat/gemini_client.py` (to be deleted)
-- V2 Implementation: `backend/apps/hydrochat/gemini_client_v2.py` (to be renamed)
-- Phase 17 Spec: `phase_2.md` lines 69-116 (SDK migration goals)
-- Test File: `backend/apps/hydrochat/tests/test_phase14_llm_integration.py`
-
-**Related Principles:**
-- "Avoid technical debt" ✓
-- "Use official libraries over custom implementations" ✓
-- "Accurate metrics > estimates" ✓
-- "Simplify by removing duplication" ✓
-
-### Gemini Input Length Configuration (2025-10-19)
-
-**Context**: Code review identified hardcoded `1000` character limit in input sanitization (gemini_client.py line 229).
-
-**Issue**: Magic number violates maintainability principles - difficult to adjust without code changes.
-
-**Solution: Configurable Parameter**
-
-**Implementation**:
-```python
-# Module-level constant as default
-DEFAULT_MAX_INPUT_LENGTH = 1000  # Maximum input length to prevent token abuse
-
-# In _load_config():
-self.max_input_length = getattr(settings, 'GEMINI_MAX_INPUT_LENGTH', DEFAULT_MAX_INPUT_LENGTH)
-
-# In _sanitize_input():
-if len(sanitized) > self.max_input_length:
-    sanitized = sanitized[:self.max_input_length] + "..."
-    logger.info(f"[GEMINI-SDK] Input truncated to {self.max_input_length} chars to prevent token abuse")
-```
-
-**Benefits**:
-1. **Configurable**: Can be adjusted via Django settings without code changes
-2. **Documented**: Constant name makes purpose explicit
-3. **Consistent**: Follows existing pattern for other config parameters (timeout, max_retries)
-4. **Better Logging**: Shows actual limit in truncation message
-
-**Configuration** (via `.env` file):
-```bash
-# Gemini LLM Configuration (Phase 14 & 17)
-GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL=gemini-2.0-flash-exp
-GEMINI_MAX_INPUT_LENGTH=1000          # ← Configurable limit (default: 1000)
-LLM_REQUEST_TIMEOUT=30.0
-LLM_MAX_RETRIES=3
-```
-
-**Files Modified:**
-- `backend/apps/hydrochat/gemini_client.py` lines 21, 112, 121, 127, 235-237
-- `backend/config/settings/base.py` lines 124-128 (Gemini settings)
-- `.env` lines 3-8 (Gemini configuration)
-- `.env.example` lines 19-24 (documentation)
-
-**Related Principles:**
-- "No magic numbers" ✓
-- "Configuration over hardcoding" ✓
-- "KISS (Keep It Simple, Stupid)" ✓
-
-### Performance Metrics Error Messages Enhancement (2025-10-19)
-
-**Context**: Code review identified non-descriptive error messages in `performance.py` validation.
-
-**Issue**: Error messages like `"max_entries must be positive"` don't show what invalid value was actually received, making debugging harder.
-
-**Solution: Include Actual Values in Error Messages**
-
-**Implementation** (`backend/apps/hydrochat/performance.py` lines 30-33):
-```python
-# Before
-if max_entries <= 0:
-    raise ValueError("max_entries must be positive")
-if ttl_hours <= 0:
-    raise ValueError("ttl_hours must be positive")
-
-# After
-if max_entries <= 0:
-    raise ValueError(f"max_entries must be positive, got: {max_entries}")
-if ttl_hours <= 0:
-    raise ValueError(f"ttl_hours must be positive, got: {ttl_hours}")
-```
-
-**Benefits**:
-1. **Better Debugging**: Immediately see what invalid value was passed
-2. **Faster Root Cause Analysis**: No need to add debug prints or breakpoints
-3. **Clear Error Context**: Error message is self-documenting
-
-**Example Error Messages**:
-```python
-# Invalid max_entries
-PerformanceMetrics(max_entries=0)
-# ValueError: max_entries must be positive, got: 0
-
-# Invalid ttl_hours
-PerformanceMetrics(max_entries=10, ttl_hours=-5)
-# ValueError: ttl_hours must be positive, got: -5
-```
-
-**Files Modified:**
-- `backend/apps/hydrochat/performance.py` lines 31, 33
-- `backend/apps/hydrochat/metrics_store.py` lines 38, 40
-- `backend/apps/hydrochat/tests/test_phase17_metrics_retention.py` lines 39, 42 (test enhancement)
-
-**Test Results:**
-- ✅ All 27 metrics retention tests passing
-- ✅ Test now validates error messages include actual values
-- ✅ No regressions from improved error messages
-
-**Related Principles:**
-- "Descriptive error messages" ✓
-- "Developer experience (DX)" ✓
-- "Self-documenting code" ✓
 
 ---
 ## Phase 14 – Gemini API Integration & LLM Fallback (HydroChat.md §2, §15)
@@ -397,6 +29,39 @@ EC:
 - Test: Cost tracking increments properly for successful/failed LLM calls
 DEP: Phase 13 completion
 RISK: API rate limits – implement exponential backoff per §17; API costs – add usage tracking; Prompt injection – sanitize user input; LLM hallucination – validate responses against Intent enum strictly.
+
+### Phase 14 Implementation Status (2025-10-19)
+
+**✅ COMPLETED:**
+- ✅ `gemini_client.py` with official `google-genai` SDK (V2 implementation)
+- ✅ `classify_intent_fallback()` - LLM intent classification when regex returns UNKNOWN
+- ✅ `extract_fields_fallback()` - LLM field extraction (NRIC, names, contact, DOB)
+- ✅ Environment config: `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_MAX_INPUT_LENGTH` via `.env`
+- ✅ Prompt engineering: Structured prompts with all 7 Intent enum examples
+- ✅ Response parsing: JSON extraction with markdown support
+- ✅ Usage tracking: Token counting, cost calculation via `response.usage_metadata`
+- ✅ Prompt injection prevention: Input sanitization and validation
+- ✅ Model: `gemini-2.0-flash-exp` (official SDK)
+- ✅ All 28 LLM integration tests passing
+
+**Integration Status**:
+- ✅ Integrated in `conversation_graph.py` (imports GeminiClient)
+- ✅ Used by `intent_classifier.py` for fallback classification
+- ✅ Metrics tracking via `agent_stats.py`
+
+**Key Features**:
+- Exponential backoff on API errors (3 retries max)
+- Rate limit handling with proper error messages
+- Configurable input length limit (default: 1000 chars)
+- Thread-safe singleton pattern
+- Comprehensive error logging
+
+**References**:
+- Implementation: `backend/apps/hydrochat/gemini_client.py`
+- Tests: `backend/apps/hydrochat/tests/test_phase14_llm_integration.py` (28/28 passing)
+- Configuration: `backend/config/settings/base.py` lines 124-128
+
+---
 
 ## Phase 15 – Missing Core Nodes Implementation (HydroChat.md §24, §27)
 D:
@@ -483,6 +148,79 @@ RISK:
 - Performance overhead – batch metric updates, use lightweight timing decorators
 - Alert fatigue – tune thresholds carefully based on production data
 - **Cost Tracking Precision**: Token-to-cost conversion uses fixed rates; Mitigation: Document rate assumptions, make configurable per model
+
+### Phase 17 Implementation Status (2025-10-19)
+
+**✅ COMPLETED:**
+1. **Gemini SDK Migration (V1 → V2)**:
+   - ✅ Migrated from manual `httpx` to official `google-genai` SDK
+   - ✅ Deleted old `gemini_client.py` (V1 httpx implementation)
+   - ✅ Renamed `gemini_client_v2.py` → `gemini_client.py`
+   - ✅ Updated all imports across 5 files (conversation_graph, intent_classifier, agent_stats, views, tests)
+   - ✅ All 28 LLM integration tests updated and passing
+   - ✅ Accurate token tracking from `response.usage_metadata` (prompt + completion tokens)
+   - ✅ Cost calculation using real token counts (not estimates)
+   - ✅ Model: `gemini-2.0-flash-exp` (SDK default)
+
+2. **Metrics Retention Policy**:
+   - ✅ Implemented in-memory retention with configurable TTL
+   - ✅ `MetricsStore` class with max_entries and ttl_hours parameters
+   - ✅ Automatic cleanup of expired entries
+   - ✅ Configurable via `METRICS_MAX_ENTRIES` and `METRICS_TTL_HOURS`
+   - ✅ All 27 metrics retention tests passing
+
+3. **Configuration Management**:
+   - ✅ Added `GEMINI_MAX_INPUT_LENGTH` configuration (default: 1000 chars)
+   - ✅ Configurable via `.env` file and Django settings
+   - ✅ Better error messages with actual values (performance.py, metrics_store.py)
+
+4. **Metrics Export Endpoint**:
+   - ✅ `/api/hydrochat/metrics/export/` JSON endpoint implemented
+   - ✅ Developer-only access (staff/superuser)
+   - ✅ Returns LLM metrics, performance stats, retention policy info
+   - ✅ Fixed conversation store access to use proper API
+
+**🔄 IN PROGRESS / TODO:**
+1. **Performance Benchmarks**:
+   - ⏳ `@track_response_time` decorator (not yet implemented)
+   - ⏳ <2s threshold enforcement and warnings
+   - ⏳ Response latency monitoring
+
+2. **Conversation Analytics**:
+   - ⏳ Intent classification accuracy tracking
+   - ⏳ Error rate monitoring with >20% threshold alerts
+   - ⏳ User satisfaction indicators
+
+3. **Extended MetricsLogger**:
+   - ⏳ Conversation flow timing (beyond current metrics)
+   - ⏳ Per-turn performance tracking
+
+**Key Files Modified**:
+- `backend/apps/hydrochat/gemini_client.py` (V2 SDK implementation)
+- `backend/apps/hydrochat/performance.py` (metrics with retention)
+- `backend/apps/hydrochat/metrics_store.py` (storage with TTL)
+- `backend/apps/hydrochat/views.py` (metrics export endpoint)
+- `backend/config/settings/base.py` (Gemini configuration)
+- `.env` and `.env.example` (configuration parameters)
+
+**Tests Status**:
+- ✅ 28/28 LLM integration tests passing (`test_phase14_llm_integration.py`)
+- ✅ 27/27 metrics retention tests passing (`test_phase17_metrics_retention.py`)
+- ✅ 2/2 metrics export tests passing (`test_phase17_sdk_migration.py`)
+
+**Next Steps for Phase 17 Completion**:
+1. Implement `@track_response_time` decorator
+2. Add conversation analytics tracking
+3. Implement alert threshold logic (error rate >20%)
+4. Complete performance benchmark tests
+5. Document metrics dashboard integration guide
+
+**References**:
+- SDK Migration Details: [`code_review.md`](code_review.md#gemini-client-sdk-migration-v1--v2-2025-10-19)
+- Test Files: `backend/apps/hydrochat/tests/test_phase17_*.py`
+- Configuration: `backend/config/settings/base.py` lines 124-128
+
+---
 
 ## Phase 18 – Advanced State Management (Redis Option) (HydroChat.md §2 Future)
 
@@ -1074,27 +812,52 @@ cd frontend/test; .\run-phase14-20-tests.ps1
 ## Progress Tracking (Phases 14-20)
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 14 | TODO | Gemini API integration - LLM fallback classification |
+| 14 | **PARTIAL** ✅ | Gemini client implemented with SDK - LLM fallback classification functional, 28/28 tests passing |
 | 15 | TODO | Missing nodes: ingest_user_message, summarize_history, finalize_response |
 | 16 | TODO | Centralized routing map, graph validation, documentation |
-| 17 | TODO | Enhanced metrics, performance monitoring, analytics |
+| 17 | **PARTIAL** ✅ | **SDK Migration ✅**, Metrics Retention ✅, Export Endpoint ✅ — Still need: performance decorators, analytics tracking, alert thresholds |
 | 18 | TODO | Redis state management option with fallback |
-| 19 | TODO | Advanced scan features, STL security, audit logging |
+| 19 | **NEXT** 🎯 | Advanced scan features, STL security, audit logging |
 | 20 | TODO | Frontend error boundaries, accessibility compliance |
+
+**Legend**: ✅ Complete | 🎯 Next Priority | ⏳ In Progress
 
 ---
 ## Implementation Priority & Sequencing
-**Critical Path (Must Implement)**:
-1. Phase 14: LLM integration addresses core specification gap
-2. Phase 15: Missing nodes complete the graph architecture
-3. Phase 16: Routing map provides maintainable structure
+
+**Current Status (as of 2025-10-19)**:
+- ✅ Phase 14: **PARTIAL** - Gemini SDK integration complete, LLM fallback functional
+- ✅ Phase 17: **PARTIAL** - SDK migration, metrics retention, export endpoint complete
+- 🎯 **Next Target**: Phase 19 - Advanced scan features, STL security
+
+**Remaining Critical Path**:
+1. **Phase 15** (High Priority): Missing nodes complete the graph architecture
+   - Required for: Full conversation flow, history summarization, response formatting
+   - Blocks: Phase 16 routing validation
+   
+2. **Phase 16** (High Priority): Routing map provides maintainable structure
+   - Required for: Graph validation, state transition safety
+   - Blocks: Production deployment confidence
 
 **Enhanced Features (Should Implement)**:
-4. Phase 17: Performance monitoring for production readiness
-5. Phase 20: Frontend polish for user experience
+3. **Phase 19** 🎯 (NEXT): Advanced scan features for production readiness
+   - STL security with temporary URLs
+   - Download audit logging
+   - Enhanced filtering and pagination
+   - Can be implemented in parallel with Phase 15/16
+   
+4. **Phase 17** (Complete Remaining): Finish performance monitoring
+   - Response time decorators
+   - Alert thresholds
+   - Analytics tracking
+   
+5. **Phase 20**: Frontend polish for user experience
+   - Error boundaries
+   - Accessibility compliance
 
 **Optional Enhancements (May Implement)**:
-6. Phase 18: Redis scaling for production deployment
-7. Phase 19: Advanced features for power users
+6. **Phase 18**: Redis scaling for distributed deployment
+   - Optional feature for production scaling
+   - Can be deferred until needed
 
 This roadmap addresses the critical gaps identified in Grok's analysis while maintaining the granular, anti-hallucination structure of the original phase.md format.

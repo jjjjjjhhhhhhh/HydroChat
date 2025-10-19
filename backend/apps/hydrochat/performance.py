@@ -4,6 +4,7 @@ Provides decorators and utilities for tracking conversation response times and p
 """
 
 import time
+import asyncio
 import logging
 from functools import wraps
 from datetime import datetime, timedelta
@@ -152,6 +153,7 @@ def track_response_time(operation_name: str, threshold_seconds: float = 2.0) -> 
     """
     Decorator to track response time of operations.
     Logs warning if response time exceeds threshold.
+    Supports both synchronous and asynchronous functions.
     
     Args:
         operation_name: Name of the operation being tracked
@@ -160,49 +162,94 @@ def track_response_time(operation_name: str, threshold_seconds: float = 2.0) -> 
     Returns:
         Decorator function
     
-    Example:
+    Example (sync):
         @track_response_time("conversation_turn")
         def process_conversation(state):
             # ... process conversation ...
             return result
+    
+    Example (async):
+        @track_response_time("async_processing")
+        async def process_message(message):
+            # ... async process message ...
+            return result
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            error_message = None
+        # Detect if function is async (coroutine)
+        if asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                start_time = time.time()
+                error_message = None
+                
+                try:
+                    result = await func(*args, **kwargs)
+                    return result
+                except Exception as e:
+                    error_message = f"{type(e).__name__}: {str(e)}"
+                    raise
+                finally:
+                    elapsed = time.time() - start_time
+                    exceeded_threshold = elapsed > threshold_seconds
+                    
+                    # Log performance
+                    if exceeded_threshold:
+                        logger.warning(
+                            f"⚠️ [PERFORMANCE] Response time {elapsed:.2f}s exceeds {threshold_seconds}s "
+                            f"threshold for operation: {operation_name}"
+                        )
+                    else:
+                        logger.debug(
+                            f"[PERFORMANCE] Operation {operation_name} completed in {elapsed:.2f}s"
+                        )
+                    
+                    # Record metrics
+                    _global_performance_metrics.add_response_time(
+                        operation=operation_name,
+                        duration=elapsed,
+                        timestamp=datetime.now(),
+                        exceeded_threshold=exceeded_threshold,
+                        error=error_message
+                    )
             
-            try:
-                result = func(*args, **kwargs)
-                return result
-            except Exception as e:
-                error_message = f"{type(e).__name__}: {str(e)}"
-                raise
-            finally:
-                elapsed = time.time() - start_time
-                exceeded_threshold = elapsed > threshold_seconds
+            return async_wrapper
+        else:
+            @wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                start_time = time.time()
+                error_message = None
                 
-                # Log performance
-                if exceeded_threshold:
-                    logger.warning(
-                        f"⚠️ [PERFORMANCE] Response time {elapsed:.2f}s exceeds {threshold_seconds}s "
-                        f"threshold for operation: {operation_name}"
+                try:
+                    result = func(*args, **kwargs)
+                    return result
+                except Exception as e:
+                    error_message = f"{type(e).__name__}: {str(e)}"
+                    raise
+                finally:
+                    elapsed = time.time() - start_time
+                    exceeded_threshold = elapsed > threshold_seconds
+                    
+                    # Log performance
+                    if exceeded_threshold:
+                        logger.warning(
+                            f"⚠️ [PERFORMANCE] Response time {elapsed:.2f}s exceeds {threshold_seconds}s "
+                            f"threshold for operation: {operation_name}"
+                        )
+                    else:
+                        logger.debug(
+                            f"[PERFORMANCE] Operation {operation_name} completed in {elapsed:.2f}s"
+                        )
+                    
+                    # Record metrics
+                    _global_performance_metrics.add_response_time(
+                        operation=operation_name,
+                        duration=elapsed,
+                        timestamp=datetime.now(),
+                        exceeded_threshold=exceeded_threshold,
+                        error=error_message
                     )
-                else:
-                    logger.debug(
-                        f"[PERFORMANCE] Operation {operation_name} completed in {elapsed:.2f}s"
-                    )
-                
-                # Record metrics
-                _global_performance_metrics.add_response_time(
-                    operation=operation_name,
-                    duration=elapsed,
-                    timestamp=datetime.now(),
-                    exceeded_threshold=exceeded_threshold,
-                    error=error_message
-                )
-        
-        return wrapper
+            
+            return sync_wrapper
     return decorator
 
 

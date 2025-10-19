@@ -9,8 +9,8 @@ from datetime import datetime
 
 from langgraph.graph import StateGraph, MessagesState, END
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.redis import RedisSaver
+# from langgraph.checkpoint.memory import MemorySaver  # Unused, remove until checkpointing is implemented
+# from langgraph.checkpoint.redis import RedisSaver  # Unused, remove until checkpointing is implemented
 
 from .enums import Intent, PendingAction, ConfirmationType, DownloadStage
 from .state import ConversationState

@@ -404,7 +404,6 @@ class MetricsExportAPIView(APIView):
             from .performance import get_performance_summary
             from .gemini_client import get_gemini_metrics_v2
             from .metrics_store import get_global_metrics_store
-            from .agent_stats import agent_stats
             
             # Gather performance metrics
             performance_summary = get_performance_summary()
@@ -416,12 +415,11 @@ class MetricsExportAPIView(APIView):
             metrics_store = get_global_metrics_store()
             retention_stats = metrics_store.get_statistics()
             
-            # Get a dummy conversation state for agent stats
-            # In production, this would aggregate across all conversations
-            from .state import ConversationState
-            sample_state = ConversationState()
+            # Gather conversation store statistics
+            conversation_stats = conversation_store.get_stats()
             
-            # Aggregate conversation metrics if available
+            # Aggregate conversation metrics
+            # Note: Currently returns placeholder values; future enhancement could aggregate across active conversations
             aggregate_metrics = {
                 'total_api_calls': 0,
                 'successful_ops': 0,
@@ -453,7 +451,7 @@ class MetricsExportAPIView(APIView):
                     'last_cleanup': retention_stats['last_cleanup']
                 },
                 'system_info': {
-                    'active_conversations': len(conversation_store.store),
+                    'active_conversations': conversation_stats['active_conversations'],
                     'export_version': '1.0.0'
                 }
             }

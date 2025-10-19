@@ -59,25 +59,27 @@ _gemini_metrics_v2 = GeminiUsageMetricsV2()
 
 def calculate_cost(
     prompt_tokens: int,
-    completion_tokens: int,
-    model: str = "gemini-2.0-flash-exp"
+    completion_tokens: int
 ) -> float:
     """
     Calculate cost based on actual token usage.
     
-    Gemini 2.0 Flash pricing (as of 2025):
+    Uses Gemini 2.0 Flash pricing (as of 2025):
     - Input: $0.10 per 1M tokens
     - Output: $0.30 per 1M tokens
+    
+    Note: Currently uses fixed rates for gemini-2.0-flash-exp model.
+    When multiple models are supported, this function should accept
+    a model parameter to apply model-specific rates.
     
     Args:
         prompt_tokens: Number of input tokens
         completion_tokens: Number of output tokens
-        model: Model name
     
     Returns:
         Cost in USD
     """
-    # Rates per 1M tokens
+    # Rates per 1M tokens (gemini-2.0-flash-exp)
     INPUT_RATE = 0.10
     OUTPUT_RATE = 0.30
     
@@ -329,7 +331,7 @@ Respond with ONLY a JSON object in this exact format:
                 completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
             
             # Calculate cost
-            cost = calculate_cost(prompt_tokens, completion_tokens, self.model)
+            cost = calculate_cost(prompt_tokens, completion_tokens)
             
             # Parse response
             text = response.text.strip()

@@ -32,7 +32,7 @@ class HydroChatService {
       };
       
       // Only include message_id if explicitly provided (for future backend idempotency support)
-      if (messageId !== null && messageId !== undefined) {
+      if (messageId != null && messageId !== "") {
         payload.message_id = messageId;
       }
       

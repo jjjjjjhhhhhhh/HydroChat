@@ -5,6 +5,7 @@ Tests response time tracking, performance decorators, and alert thresholds.
 
 import pytest
 import time
+import asyncio
 import logging
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
@@ -107,6 +108,101 @@ class TestResponseTimeTracking:
         # Verify operation names
         operation_names = [m['operation'] for m in metrics.response_times]
         assert operation_names == ["operation_a", "operation_b", "operation_a"]
+    
+    @pytest.mark.asyncio
+    async def test_track_response_time_async_decorator_basic(self):
+        """Test that decorator captures response time for async operations."""
+        reset_performance_metrics()
+        
+        @track_response_time("async_operation")
+        async def async_fast_operation():
+            await asyncio.sleep(0.1)  # 100ms async operation
+            return "async_success"
+        
+        result = await async_fast_operation()
+        
+        assert result == "async_success"
+        metrics = get_performance_metrics()
+        assert len(metrics.response_times) == 1
+        assert 0.09 < metrics.response_times[0]['duration'] < 0.15
+        assert metrics.response_times[0]['operation'] == "async_operation"
+        assert metrics.response_times[0]['exceeded_threshold'] is False
+    
+    @pytest.mark.asyncio
+    async def test_track_response_time_async_exceeds_threshold(self):
+        """Test that decorator warns when async response time exceeds threshold."""
+        reset_performance_metrics()
+        
+        @track_response_time("async_slow_operation", threshold_seconds=2.0)
+        async def async_slow_operation():
+            await asyncio.sleep(2.1)  # 2.1s async operation (exceeds threshold)
+            return "slow_success"
+        
+        with patch('apps.hydrochat.performance.logger') as mock_logger:
+            result = await async_slow_operation()
+        
+        assert result == "slow_success"
+        
+        # Verify warning was logged
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        assert "⚠️ [PERFORMANCE]" in warning_msg
+        assert "async_slow_operation" in warning_msg
+        assert "exceeds 2.0s" in warning_msg
+        
+        # Verify metrics captured exceeded threshold
+        metrics = get_performance_metrics()
+        assert len(metrics.response_times) == 1
+        assert metrics.response_times[0]['exceeded_threshold'] is True
+    
+    @pytest.mark.asyncio
+    async def test_track_response_time_async_exception_handling(self):
+        """Test that decorator captures errors in async functions and still records metrics."""
+        reset_performance_metrics()
+        
+        @track_response_time("async_failing_operation")
+        async def async_failing_operation():
+            await asyncio.sleep(0.05)
+            raise ValueError("Async test error")
+        
+        with pytest.raises(ValueError, match="Async test error"):
+            await async_failing_operation()
+        
+        # Metrics should still be captured despite exception
+        metrics = get_performance_metrics()
+        assert len(metrics.response_times) == 1
+        assert metrics.response_times[0]['operation'] == "async_failing_operation"
+        assert metrics.response_times[0]['error'] == "ValueError: Async test error"
+    
+    @pytest.mark.asyncio
+    async def test_mixed_sync_and_async_operations(self):
+        """Test tracking both sync and async operations in the same session."""
+        reset_performance_metrics()
+        
+        @track_response_time("sync_op")
+        def sync_operation():
+            time.sleep(0.05)
+            return "sync"
+        
+        @track_response_time("async_op")
+        async def async_operation():
+            await asyncio.sleep(0.05)
+            return "async"
+        
+        # Execute both sync and async operations
+        sync_result = sync_operation()
+        async_result = await async_operation()
+        
+        assert sync_result == "sync"
+        assert async_result == "async"
+        
+        metrics = get_performance_metrics()
+        assert len(metrics.response_times) == 2
+        
+        # Verify both operation types were captured
+        operation_names = [m['operation'] for m in metrics.response_times]
+        assert "sync_op" in operation_names
+        assert "async_op" in operation_names
     
     def test_performance_metrics_summary_statistics(self):
         """Test that performance metrics provide summary statistics."""

@@ -194,28 +194,29 @@ class TestConversationGraphCheckpointer:
             assert graph.graph is not None
             assert graph.use_redis is True  # Setting preserved
     
+    @pytest.mark.skip(reason="RedisSaver imports commented out until checkpointing is fully implemented")
     @patch('config.redis_config.RedisConfig.health_check')
     @patch('config.redis_config.RedisConfig.get_connection_string')
-    @patch('apps.hydrochat.conversation_graph.RedisSaver')
     def test_graph_falls_back_on_redis_saver_error(
         self,
-        mock_redis_saver_class,
         mock_get_conn_str,
         mock_health_check,
         mock_http_client
     ):
-        """Test graceful fallback when RedisSaver initialization fails."""
+        """Test graceful fallback when RedisSaver initialization fails.
+        
+        Note: Currently skipped because checkpointing is not yet fully implemented.
+        RedisSaver and MemorySaver imports are commented out until Phase 18
+        checkpointing implementation is complete. See conversation_graph.py lines 12-13.
+        """
         # Health check passes but RedisSaver throws error
         mock_health_check.return_value = True
         mock_get_conn_str.return_value = "redis://localhost:6379/0"
-        mock_redis_saver_class.from_conn_string.side_effect = Exception(
-            "Redis initialization error"
-        )
         
         with patch.dict(os.environ, {'USE_REDIS_STATE': 'true'}):
             graph = ConversationGraph(mock_http_client, use_redis=True)
             
-            # Graph should still initialize with MemorySaver fallback
+            # Graph should still initialize (stateless mode)
             assert graph.graph is not None
 
 

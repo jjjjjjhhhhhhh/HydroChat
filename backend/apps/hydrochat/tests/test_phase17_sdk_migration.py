@@ -275,7 +275,7 @@ class TestCostCalculationAccuracy:
         input_tokens = 1000
         output_tokens = 500
         
-        cost = calculate_cost(input_tokens, output_tokens, model="gemini-2.0-flash-exp")
+        cost = calculate_cost(input_tokens, output_tokens)
         
         # Expected: (1000 * 0.10 + 500 * 0.30) / 1,000,000 = 0.00025
         expected_cost = (input_tokens * 0.10 + output_tokens * 0.30) / 1_000_000
