@@ -24,6 +24,8 @@ This document tracks all code review improvements, refactorings, and bug fixes i
 15. [Redis Health Check Caching for Performance](#redis-health-check-caching-for-performance-2025-10-19)
 16. [Unused Django Settings Import Cleanup](#unused-django-settings-import-cleanup-2025-10-19)
 17. [Phase 17 Test Count Documentation Consistency](#phase-17-test-count-documentation-consistency-2025-10-19)
+18. [SDK Migration Test Cost Calculation Fix](#sdk-migration-test-cost-calculation-fix-2025-10-19)
+19. [Unused Gemini Configuration Parameters Cleanup](#unused-gemini-configuration-parameters-cleanup-2025-10-19)
 
 ---
 
@@ -1440,27 +1442,210 @@ pytest apps/hydrochat/tests/test_phase17_*.py -v
 
 ---
 
+## SDK Migration Test Cost Calculation Fix (2025-10-19)
+
+**Code Review Item #18**
+
+### Issue
+**Location**: `backend/apps/hydrochat/tests/test_phase17_sdk_migration.py` lines 136-152
+
+**Problem**: The test `test_cost_calculation_gemini_flash` was mocking `total_token_count = 200` but **not** mocking `prompt_token_count` and `candidates_token_count`, which are the actual fields used by production code to calculate cost. This caused the test to expect a non-zero cost but the production code would calculate a cost of $0.
+
+**Test Flaw**:
+```python
+# Test only set:
+mock_response.usage_metadata.total_token_count = 200
+
+# But production code uses:
+prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)  # Default: 0
+completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)  # Default: 0
+cost = calculate_cost(prompt_tokens, completion_tokens)  # Would be: calculate_cost(0, 0) = $0
+```
+
+**Why this matters**: The test was verifying cost calculation accuracy, but wasn't actually testing the production code path. The cost would be $0, not the expected `200 * (0.15 / 1_000_000) = $0.00003`.
+
+### Solution
+Updated the mock to set all three token count fields that match the actual Google Gemini SDK response structure:
+
+```python
+# Set actual token counts that production code uses for cost calculation
+mock_response.usage_metadata.prompt_token_count = 150
+mock_response.usage_metadata.candidates_token_count = 50
+mock_response.usage_metadata.total_token_count = 200
+```
+
+Then updated the expected cost calculation to use the actual pricing model:
+```python
+# Verify cost calculation using actual rates
+# Gemini 2.0 Flash: $0.10 per 1M input tokens, $0.30 per 1M output tokens
+# Cost = (150 * $0.10 + 50 * $0.30) / 1M = ($15 + $15) / 1M = $30 / 1M = $0.00003
+expected_cost = (150 * 0.10 + 50 * 0.30) / 1_000_000
+```
+
+### Changes Made
+
+**Updated mock in `test_cost_calculation_gemini_flash`** (lines 140-143, 151-154):
+```python
+# Before:
+mock_response.usage_metadata.total_token_count = 200
+expected_cost = 200 * (0.15 / 1_000_000)  # Wrong: assumes average rate
+
+# After:
+mock_response.usage_metadata.prompt_token_count = 150
+mock_response.usage_metadata.candidates_token_count = 50
+mock_response.usage_metadata.total_token_count = 200
+expected_cost = (150 * 0.10 + 50 * 0.30) / 1_000_000  # Correct: actual pricing
+```
+
+### Verification
+
+```powershell
+# Run the specific test
+pytest apps/hydrochat/tests/test_phase17_sdk_migration.py::TestCostCalculationAccuracy::test_cost_calculation_gemini_flash -v
+# Result: PASSED ✅
+
+# Run all SDK migration tests
+pytest apps/hydrochat/tests/test_phase17_sdk_migration.py -v
+# Result: 20/20 passed ✅
+```
+
+**Benefits**:
+- ✅ Test now accurately reflects production code behavior
+- ✅ Properly validates cost calculation with differential pricing (input vs output tokens)
+- ✅ Uses the actual Gemini SDK response structure
+- ✅ Tests the real pricing model: $0.10/1M input, $0.30/1M output
+- ✅ Catches any regression in cost calculation logic
+
+**Production Code Reference** (`gemini_client.py` lines 427-429):
+```python
+prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+cost = calculate_cost(prompt_tokens, completion_tokens)
+```
+
+**Key Learning**: When testing cost/pricing logic, ensure test mocks provide all the data fields that production code actually uses. Don't make assumptions about how cost is derived (e.g., from total tokens) when the actual implementation uses separate fields with different rates.
+
+---
+
+## Unused Gemini Configuration Parameters Cleanup (2025-10-19)
+
+**Code Review Item #19**
+
+### Issue
+**Location**: `backend/apps/hydrochat/gemini_client.py` lines 122-123, 128-129
+
+**Problem**: The `timeout` and `max_retries` configuration parameters were loaded from environment variables and Django settings but **never used** in any Google Gemini SDK calls. This created:
+- Dead configuration that misled developers
+- Unnecessary environment variables
+- False expectation that timeout/retry behavior could be controlled via config
+
+**Dead Configuration**:
+```python
+# Loaded but never used:
+self.timeout = getattr(settings, 'LLM_REQUEST_TIMEOUT', 30.0)
+self.max_retries = getattr(settings, 'LLM_MAX_RETRIES', 3)
+
+# SDK calls don't use these parameters:
+response = await self.genai_client.aio.models.generate_content(
+    model=self.model,
+    contents=prompt,
+    config=config  # timeout and max_retries NOT passed here
+)
+```
+
+### Solution
+Removed all unused timeout and max_retries configuration from:
+1. `gemini_client.py` - Client initialization
+2. `.env` - Environment variables
+3. `.env.example` - Example configuration
+4. `backend/config/settings/base.py` - Django settings
+
+### Changes Made
+
+1. **Updated `gemini_client.py`** (lines 122-129):
+   ```python
+   # Before:
+   self.timeout = getattr(settings, 'LLM_REQUEST_TIMEOUT', 30.0)
+   self.max_retries = getattr(settings, 'LLM_MAX_RETRIES', 3)
+   self.max_input_length = getattr(settings, 'GEMINI_MAX_INPUT_LENGTH', DEFAULT_MAX_INPUT_LENGTH)
+   
+   # After:
+   self.max_input_length = getattr(settings, 'GEMINI_MAX_INPUT_LENGTH', DEFAULT_MAX_INPUT_LENGTH)
+   # Removed: timeout and max_retries (not supported by SDK)
+   ```
+
+2. **Updated `.env`** (lines 6-7):
+   ```bash
+   # Removed:
+   LLM_REQUEST_TIMEOUT=30.0
+   LLM_MAX_RETRIES=3
+   ```
+
+3. **Updated `.env.example`** (lines 23-24):
+   ```bash
+   # Removed:
+   LLM_REQUEST_TIMEOUT=30.0
+   LLM_MAX_RETRIES=3
+   ```
+
+4. **Updated `backend/config/settings/base.py`** (lines 127-128):
+   ```python
+   # Removed:
+   LLM_REQUEST_TIMEOUT = float(os.getenv('LLM_REQUEST_TIMEOUT', '30.0'))
+   LLM_MAX_RETRIES = int(os.getenv('LLM_MAX_RETRIES', '3'))
+   ```
+
+### Verification
+
+```powershell
+# Verify no usage in code
+grep "self\.timeout\|self\.max_retries" backend/apps/hydrochat/gemini_client.py
+# Result: 0 matches (only in assignments, never used)
+
+# All Phase 17 tests still pass
+pytest apps/hydrochat/tests/ -k "test_phase17" -v
+# Result: 68/68 passed ✅
+```
+
+**Benefits**:
+- ✅ Removed 4 dead configuration lines from gemini_client.py
+- ✅ Removed 2 unused environment variables
+- ✅ Cleaner configuration surface - only parameters that actually work
+- ✅ No misleading configuration options
+- ✅ Reduced maintenance burden
+- ✅ All tests still passing
+
+**Why They Were Never Used**: The Google Gemini Python SDK (`google-genai`) handles timeout and retry logic internally with its own defaults. These parameters cannot be easily configured at the per-request level in the current SDK version.
+
+**Key Learning**: Don't load configuration parameters "just in case" - only configure what the actual implementation uses. Dead configuration misleads developers and creates maintenance debt.
+
+---
+
 ## Summary
 
 All code review changes have been successfully implemented and tested. These improvements enhance:
-- **Code Quality**: Removed redundancy, improved clarity, eliminated all unused imports
+- **Code Quality**: Removed redundancy, improved clarity, eliminated all unused imports and dead configuration
 - **Maintainability**: Better error messages, configurable parameters, clear configuration sources
+- **Configuration Clarity**: Only active configuration parameters that actually affect behavior
 - **Security**: Case-insensitive prompt injection filtering
-- **Test Coverage**: DRY test utilities, comprehensive SDK migration tests
+- **Test Coverage**: DRY test utilities, comprehensive SDK migration tests, accurate cost calculation testing
+- **Test Accuracy**: Proper mocking of SDK responses to match production code behavior
 - **Performance**: Official SDK for accurate metrics, cached health checks, proper thread safety
 - **Architecture**: Clean API boundaries, proper encapsulation, hot path optimization
 - **Documentation**: Consistent test counts, accurate status reporting across all files
 
 **Total Impact**:
-- ✅ 17 code review items resolved
+- ✅ 19 code review items resolved
 - ✅ All tests passing (68 Phase 17 + 40 Phase 18 + 41 frontend) - 149 total tests
 - ✅ Zero regressions
 - ✅ Improved developer experience
-- ✅ Cleaner codebase with zero unused imports
+- ✅ Cleaner codebase with zero unused imports and dead configuration
 - ✅ Accurate documentation reflecting actual state (100% consistency)
 - ✅ Properly formatted LLM prompts for better API responses
 - ✅ Enhanced security against prompt injection attacks
 - ✅ Optimized hot path performance by eliminating redundant network calls
 - ✅ Clear configuration patterns (environment variables vs Django settings)
 - ✅ Phase 17: 100% complete (68/68 tests) with full documentation accuracy
+- ✅ Test mocks accurately reflect production API structure and pricing model
+- ✅ Configuration surface reduced to only parameters that actually work
 

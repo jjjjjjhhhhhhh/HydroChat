@@ -124,8 +124,6 @@ CORS_ALLOW_CREDENTIALS = True
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', None)
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
 GEMINI_MAX_INPUT_LENGTH = int(os.getenv('GEMINI_MAX_INPUT_LENGTH', '1000'))
-LLM_REQUEST_TIMEOUT = float(os.getenv('LLM_REQUEST_TIMEOUT', '30.0'))
-LLM_MAX_RETRIES = int(os.getenv('LLM_MAX_RETRIES', '3'))
 
 # Redis Configuration (Phase 18)
 # Optional Redis-backed conversation state management

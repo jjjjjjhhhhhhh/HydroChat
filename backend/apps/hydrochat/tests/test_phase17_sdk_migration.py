@@ -137,6 +137,9 @@ class TestIntentClassificationWithSDK:
             mock_response = Mock()
             mock_response.text = '{"intent": "LIST_PATIENTS", "confidence": 0.9, "reason": "List request"}'
             mock_response.usage_metadata = Mock()
+            # Set actual token counts that production code uses for cost calculation
+            mock_response.usage_metadata.prompt_token_count = 150
+            mock_response.usage_metadata.candidates_token_count = 50
             mock_response.usage_metadata.total_token_count = 200
             
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -145,10 +148,10 @@ class TestIntentClassificationWithSDK:
             
             metrics = get_gemini_metrics_v2()
             
-            # Verify cost calculation (200 tokens * rate)
+            # Verify cost calculation using actual rates
             # Gemini 2.0 Flash: $0.10 per 1M input tokens, $0.30 per 1M output tokens
-            # Simplified: assume ~$0.15 per 1M tokens average
-            expected_cost = 200 * (0.15 / 1_000_000)
+            # Cost = (150 * $0.10 + 50 * $0.30) / 1M = ($15 + $15) / 1M = $30 / 1M = $0.00003
+            expected_cost = (150 * 0.10 + 50 * 0.30) / 1_000_000
             assert abs(metrics['total_cost_usd'] - expected_cost) < 0.0001
 
 

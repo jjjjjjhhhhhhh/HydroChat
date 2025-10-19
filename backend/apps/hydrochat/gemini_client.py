@@ -119,14 +119,10 @@ class GeminiClientV2:
                 from django.conf import settings
                 self.api_key = getattr(settings, 'GEMINI_API_KEY', None)
                 self.model = getattr(settings, 'GEMINI_MODEL', 'gemini-2.0-flash-exp')
-                self.timeout = getattr(settings, 'LLM_REQUEST_TIMEOUT', 30.0)
-                self.max_retries = getattr(settings, 'LLM_MAX_RETRIES', 3)
                 self.max_input_length = getattr(settings, 'GEMINI_MAX_INPUT_LENGTH', DEFAULT_MAX_INPUT_LENGTH)
             except:
                 self.api_key = None
                 self.model = model
-                self.timeout = 30.0
-                self.max_retries = 3
                 self.max_input_length = DEFAULT_MAX_INPUT_LENGTH
     
     def _initialize_client(self):
