@@ -1,12 +1,15 @@
 import React from 'react';
 import { render, fireEvent, waitFor, screen } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { resetMockServiceState } from '../../__setup__/mockServices';
 import HydroChatScreen from '../../../screens/hydrochat/HydroChatScreen';
 
-// Mock the hydro chat service
+// Mock the hydro chat service - inline required by Jest
 jest.mock('../../../services/hydroChatService', () => ({
   hydroChatService: {
     sendMessage: jest.fn(),
+    canRetryMessage: jest.fn(),
+    clearRetryData: jest.fn(),
   },
 }));
 
@@ -33,8 +36,16 @@ const { hydroChatService } = require('../../../services/hydroChatService');
 
 describe('HydroChatScreen', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    hydroChatService.sendMessage.mockClear();
+    // Reset mock state using shared utility
+    resetMockServiceState(hydroChatService);
+    
+    // Setup default mock: no retry capability (tests can override)
+    hydroChatService.canRetryMessage.mockReturnValue({
+      canRetry: false,
+      attemptsRemaining: 0,
+      totalAttempts: 0,
+      maxAttempts: 3
+    });
   });
 
   describe('Title Rendering', () => {
@@ -235,6 +246,14 @@ describe('HydroChatScreen', () => {
   describe('Error Handling', () => {
     it('should show error alert on network failure', async () => {
       hydroChatService.sendMessage.mockRejectedValue(new Error('Network error. Check your connection.'));
+      
+      // Mock canRetryMessage to allow retry
+      hydroChatService.canRetryMessage.mockReturnValue({
+        canRetry: true,
+        attemptsRemaining: 3,
+        totalAttempts: 0,
+        maxAttempts: 3
+      });
 
       render(<HydroChatScreen navigation={mockNavigation} route={mockRoute} />);
       
@@ -245,11 +264,11 @@ describe('HydroChatScreen', () => {
       fireEvent.press(sendButton);
       
       await waitFor(() => {
-        expect(Alert.alert).toHaveBeenCalledWith(
-          'Message Failed',
-          'Network error. Check your connection.',
-          [{ text: 'OK' }]
-        );
+        // Should call Alert.alert with retry options
+        expect(Alert.alert).toHaveBeenCalled();
+        const alertCall = Alert.alert.mock.calls[0];
+        expect(alertCall[0]).toBe('Message Failed');
+        expect(alertCall[1]).toContain('Network error');
       });
     });
   });

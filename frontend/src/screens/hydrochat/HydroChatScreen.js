@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { hydroChatService } from '../../services';
+import { RetryIcon } from '../../components/ui/Icons';
 import { useFocusEffect } from '@react-navigation/native';
 
 const TYPING_INDICATOR_ID = '__typing_indicator__';
@@ -41,7 +42,7 @@ const TypingIndicator = () => {
   );
 };
 
-const MessageBubble = ({ message, isUser }) => {
+const MessageBubble = ({ message, isUser, onRetry }) => {
   if (message.id === TYPING_INDICATOR_ID) {
     return <TypingIndicator />;
   }
@@ -58,16 +59,26 @@ const MessageBubble = ({ message, isUser }) => {
       ]}>
         {message.content}
       </Text>
-      {message.error && (
-        <TouchableOpacity 
-          style={styles.retryButton}
-          onPress={() => {
-            // This would be handled by parent component
-            console.log('Retry pressed for message:', message.id);
-          }}
-        >
-          <Text style={styles.retryButtonText}>Retry</Text>
-        </TouchableOpacity>
+      {message.error && onRetry && (
+        <View style={styles.errorActions}>
+          <TouchableOpacity 
+            style={[styles.retryButton, message.retrying && styles.retryButtonDisabled]}
+            onPress={() => onRetry(message.id)}
+            disabled={message.retrying}
+          >
+            {message.retrying ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <View style={styles.retryButtonContent}>
+                <RetryIcon color="#fff" size={14} />
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <Text style={styles.retryInfo}>
+            {message.retryAttempts ? `Attempt ${message.retryAttempts + 1}` : ''}
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -122,6 +133,7 @@ const HydroChatScreen = ({ navigation, route }) => {
     }, [conversationState.lastAgentOperation, navigation])
   );
   
+  const generateMessageId = () => {
     return Date.now().toString() + Math.random().toString(36).substring(2, 11);
   };
   
@@ -169,28 +181,42 @@ const HydroChatScreen = ({ navigation, route }) => {
       return;
     }
     
+    await sendMessageWithId(message);
+  };
+  
+  const sendMessageWithId = async (message, messageId = null) => {
+    const actualMessageId = messageId || generateMessageId();
+    
     // Hide proxy message on first user input
     if (showProxyMessage) {
       setShowProxyMessage(false);
     }
     
-    // Add user message
-    const userMessageId = addMessage('user', message);
-    setInputText('');
+    // Add user message (or update existing one for retry)
+    if (!messageId) {
+      addMessage('user', message, { id: actualMessageId });
+      setInputText('');
+    }
     
     // Set sending state and add typing indicator
     setConversationState(prev => ({
       ...prev,
-      sending: true
+      sending: true,
+      messages: prev.messages.map(msg => 
+        msg.id === actualMessageId 
+          ? { ...msg, error: false, retrying: true }
+          : msg
+      )
     }));
     
     addTypingIndicator();
     
     try {
-      console.log('[HydroChatScreen] Sending message to HydroChat...');
+      console.log(`[HydroChatScreen] Sending message to HydroChat (ID: ${actualMessageId})...`);
       const response = await hydroChatService.sendMessage(
         conversationState.conversationId,
-        message
+        message,
+        actualMessageId
       );
       
       // Remove typing indicator
@@ -201,6 +227,11 @@ const HydroChatScreen = ({ navigation, route }) => {
         ...prev,
         conversationId: response.conversation_id,
         sending: false,
+        messages: prev.messages.map(msg => 
+          msg.id === actualMessageId 
+            ? { ...msg, retrying: false }
+            : msg
+        ),
         lastAgentOperation: {
           type: response.agent_op || 'NONE',
           patientId: response.agent_state?.selected_patient_id || null
@@ -218,31 +249,84 @@ const HydroChatScreen = ({ navigation, route }) => {
         addMessage('assistant', 'I received your message but had no response. Please try again.');
       }
       
-      console.log('[HydroChatScreen] Successfully processed HydroChat response');
+      console.log(`[HydroChatScreen] Successfully processed HydroChat response (ID: ${actualMessageId})`);
       
     } catch (error) {
-      console.error('[HydroChatScreen] Error sending message:', error);
+      console.error(`[HydroChatScreen] Error sending message (ID: ${actualMessageId}):`, error);
       
       // Remove typing indicator
       removeTypingIndicator();
       
-      // Mark user message as failed
+      // Get retry info
+      const retryInfo = hydroChatService.canRetryMessage(actualMessageId);
+      
+      // Mark user message as failed with retry info
       setConversationState(prev => ({
         ...prev,
         messages: prev.messages.map(msg => 
-          msg.id === userMessageId 
-            ? { ...msg, error: true }
+          msg.id === actualMessageId 
+            ? { 
+                ...msg, 
+                error: true, 
+                retrying: false,
+                retryAttempts: retryInfo.totalAttempts,
+                canRetry: retryInfo.canRetry
+              }
             : msg
         ),
         sending: false
       }));
       
-      // Show error to user
+      // Show error to user with retry option
+      const errorMessage = error.message || 'Unable to send message. Please check your connection and try again.';
+      
+      if (retryInfo.canRetry) {
+        Alert.alert(
+          'Message Failed',
+          `${errorMessage}\n\nYou have ${retryInfo.attemptsRemaining} retry attempt(s) remaining.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Retry Now', 
+              onPress: () => handleRetryMessage(actualMessageId)
+            }
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Message Failed',
+          `${errorMessage}\n\nMaximum retry attempts reached.`,
+          [{ text: 'OK' }]
+        );
+      }
+    }
+  };
+  
+  const handleRetryMessage = async (messageId) => {
+    const retryInfo = hydroChatService.canRetryMessage(messageId);
+    
+    if (!retryInfo.canRetry) {
       Alert.alert(
-        'Message Failed',
-        error.message || 'Unable to send message. Please check your connection and try again.',
+        'Cannot Retry',
+        `Maximum retry attempts (${retryInfo.maxAttempts}) reached for this message.`,
         [{ text: 'OK' }]
       );
+      return;
+    }
+    
+    // Find the original message
+    const originalMessage = conversationState.messages.find(msg => msg.id === messageId);
+    if (!originalMessage) {
+      Alert.alert('Error', 'Original message not found', [{ text: 'OK' }]);
+      return;
+    }
+    
+    console.log(`[HydroChatScreen] Retrying message ${messageId} (${retryInfo.totalAttempts + 1}/${retryInfo.maxAttempts})`);
+    
+    try {
+      await sendMessageWithId(originalMessage.content, messageId);
+    } catch (error) {
+      console.error(`[HydroChatScreen] Retry failed for message ${messageId}:`, error);
     }
   };
   
@@ -302,7 +386,8 @@ const HydroChatScreen = ({ navigation, route }) => {
             >
               <MessageBubble 
                 message={message} 
-                isUser={message.role === 'user'} 
+                isUser={message.role === 'user'}
+                onRetry={message.role === 'user' ? handleRetryMessage : null}
               />
             </View>
           ))}
@@ -319,6 +404,7 @@ const HydroChatScreen = ({ navigation, route }) => {
           <View style={styles.composerRow}>
             <TextInput
               ref={textInputRef}
+              testID="chat-input"
               style={styles.textInput}
               value={inputText}
               onChangeText={handleInputChange}
@@ -330,6 +416,7 @@ const HydroChatScreen = ({ navigation, route }) => {
             />
             
             <TouchableOpacity
+              testID="send-button"
               style={[
                 styles.sendButton,
                 !canSend && styles.sendButtonDisabled
@@ -446,11 +533,35 @@ const styles = StyleSheet.create({
     backgroundColor: '#27CFA0',
     borderRadius: 8,
     alignSelf: 'flex-start',
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  retryButtonDisabled: {
+    opacity: 0.7,
+    backgroundColor: '#707070',
   },
   retryButtonText: {
     color: 'white',
     fontSize: 12,
     fontWeight: '600',
+    marginLeft: 4,
+  },
+  retryButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorActions: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  retryInfo: {
+    fontSize: 10,
+    color: '#707070',
+    marginLeft: 8,
+    fontStyle: 'italic',
   },
   proxyMessage: {
     marginHorizontal: 20,

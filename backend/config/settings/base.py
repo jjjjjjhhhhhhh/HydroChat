@@ -119,3 +119,20 @@ CORS_ALLOWED_ORIGINS = [
     # Add other origins as needed, e.g., your frontend's production URL
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+# Gemini LLM Configuration (Phase 14 & 17)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', None)
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
+GEMINI_MAX_INPUT_LENGTH = int(os.getenv('GEMINI_MAX_INPUT_LENGTH', '1000'))
+
+# Redis Configuration (Phase 18)
+# Optional Redis-backed conversation state management
+# Requires Redis server running (Docker, WSL, or Windows binary)
+REDIS_ENABLED = os.getenv('USE_REDIS_STATE', 'false').lower() == 'true'
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+REDIS_DB = int(os.getenv('REDIS_DB', '0'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_STATE_TTL = int(os.getenv('REDIS_STATE_TTL', '7200'))  # 2 hours
+REDIS_MAX_CONNECTIONS = int(os.getenv('REDIS_MAX_CONNECTIONS', '50'))
+REDIS_SOCKET_TIMEOUT = int(os.getenv('REDIS_SOCKET_TIMEOUT', '5'))

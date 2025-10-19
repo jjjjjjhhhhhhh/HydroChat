@@ -12,4 +12,7 @@ urlpatterns = [
     
     # Statistics endpoint
     path('converse/stats/', views.ConverseStatsAPIView.as_view(), name='converse_stats'),
+    
+    # Phase 17: Metrics export endpoint (developer-only)
+    path('metrics/export/', views.MetricsExportAPIView.as_view(), name='metrics_export'),
 ]

@@ -77,6 +77,48 @@ describe('HydroChatService', () => {
       });
     });
 
+    it('should include message_id when explicitly provided', async () => {
+      const mockResponse = {
+        data: {
+          conversation_id: 'test-uuid',
+          messages: [{ role: 'assistant', content: 'Retry received!' }],
+          agent_op: 'NONE',
+          agent_state: { intent: 'UNKNOWN' }
+        }
+      };
+
+      api.post.mockResolvedValue(mockResponse);
+
+      await hydroChatService.sendMessage('test-uuid', 'Hello', 'msg-123');
+
+      expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
+        conversation_id: 'test-uuid',
+        message: 'Hello',
+        message_id: 'msg-123'
+      });
+    });
+
+    it('should not include message_id when empty string is provided', async () => {
+      const mockResponse = {
+        data: {
+          conversation_id: 'test-uuid',
+          messages: [{ role: 'assistant', content: 'Response' }],
+          agent_op: 'NONE',
+          agent_state: { intent: 'UNKNOWN' }
+        }
+      };
+
+      api.post.mockResolvedValue(mockResponse);
+
+      await hydroChatService.sendMessage('test-uuid', 'Hello', '');
+
+      expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
+        conversation_id: 'test-uuid',
+        message: 'Hello'
+        // Note: message_id should NOT be included when empty string
+      });
+    });
+
     it('should handle 400 validation errors', async () => {
       const mockError = {
         response: {

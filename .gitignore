@@ -129,6 +129,12 @@ backend/logs
 # Jest coverage reports (frontend)
 frontend/coverage/
 
+# Python coverage reports (pytest-cov)
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+
 # Test script outputs (keep info.txt files)
 backend/test/test_complete_flow/*
 !backend/test/test_complete_flow/info.txt

@@ -362,3 +362,111 @@ class ConverseStatsAPIView(APIView):
                 {"error": "server", "detail": "Failed to retrieve statistics"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class MetricsExportAPIView(APIView):
+    """
+    Phase 17: Metrics Export Endpoint for Dashboard Integration
+    
+    GET /api/hydrochat/metrics/export/
+    Returns comprehensive performance and LLM metrics in JSON format.
+    
+    Developer-only endpoint per §29 - restricted to staff/superuser.
+    """
+    
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request) -> Response:
+        """
+        Export comprehensive metrics for external monitoring.
+        
+        Returns JSON with:
+        - Performance metrics (response times, violations)
+        - LLM API metrics (token usage, costs)
+        - Conversation analytics
+        - Alert thresholds status
+        - Metrics retention statistics
+        """
+        try:
+            # Developer-only access check per §29
+            if not (request.user.is_staff or request.user.is_superuser):
+                logger.warning(
+                    f"[METRICS_EXPORT] ⚠️ Unauthorized access attempt by user {request.user.username}"
+                )
+                return Response(
+                    {"error": "forbidden", "detail": "Developer-only endpoint"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            logger.info(f"[METRICS_EXPORT] 📊 Exporting metrics for user {request.user.username}")
+            
+            # Import metrics modules
+            from .performance import get_performance_summary
+            from .gemini_client import get_gemini_metrics_v2
+            from .metrics_store import get_global_metrics_store
+            
+            # Gather performance metrics
+            performance_summary = get_performance_summary()
+            
+            # Gather LLM API metrics
+            llm_metrics = get_gemini_metrics_v2()
+            
+            # Gather metrics store statistics
+            metrics_store = get_global_metrics_store()
+            retention_stats = metrics_store.get_statistics()
+            
+            # Gather conversation store statistics
+            conversation_stats = conversation_store.get_stats()
+            
+            # Aggregate conversation metrics
+            # Note: Currently returns placeholder values; future enhancement could aggregate across active conversations
+            aggregate_metrics = {
+                'total_api_calls': 0,
+                'successful_ops': 0,
+                'aborted_ops': 0,
+                'retries': 0
+            }
+            
+            # Generate comprehensive export
+            export_data = {
+                'timestamp': datetime.now().isoformat(),
+                'performance_metrics': performance_summary,
+                'llm_api_metrics': {
+                    'successful_calls': llm_metrics['successful_calls'],
+                    'failed_calls': llm_metrics['failed_calls'],
+                    'total_calls': llm_metrics['successful_calls'] + llm_metrics['failed_calls'],
+                    'total_tokens_used': llm_metrics['total_tokens_used'],
+                    'prompt_tokens': llm_metrics['prompt_tokens_used'],
+                    'completion_tokens': llm_metrics['completion_tokens_used'],
+                    'total_cost_usd': llm_metrics['total_cost_usd'],
+                    'last_call_timestamp': llm_metrics['last_call_timestamp']
+                },
+                'conversation_analytics': aggregate_metrics,
+                'retention_policy': {
+                    'max_entries': retention_stats['max_entries'],
+                    'ttl_hours': retention_stats['ttl_hours'],
+                    'current_entries': retention_stats['total_entries'],
+                    'expired_count': retention_stats['expired_count'],
+                    'storage_utilization_percent': retention_stats['storage_utilization_percent'],
+                    'last_cleanup': retention_stats['last_cleanup']
+                },
+                'system_info': {
+                    'active_conversations': conversation_stats['active_conversations'],
+                    'export_version': '1.0.0'
+                }
+            }
+            
+            logger.info(
+                f"[METRICS_EXPORT] ✅ Export complete - "
+                f"{export_data['llm_api_metrics']['total_calls']} LLM calls, "
+                f"{export_data['performance_metrics']['metrics_count']} performance entries"
+            )
+            
+            return Response(export_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.exception(f"[METRICS_EXPORT] ❌ Export error: {e}")
+            return Response(
+                {"error": "server", "detail": "Failed to export metrics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

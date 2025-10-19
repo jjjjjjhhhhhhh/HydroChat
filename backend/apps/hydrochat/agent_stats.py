@@ -38,7 +38,7 @@ class AgentStats:
         # Phase 14: Extract Gemini API metrics per §17
         gemini_metrics = {}
         try:
-            from .gemini_client import get_gemini_metrics
+            from .gemini_client import get_gemini_metrics_v2 as get_gemini_metrics
             gemini_metrics = get_gemini_metrics()
         except ImportError:
             self.logger.debug("[STATS] Gemini client not available, skipping LLM metrics")
