@@ -1,153 +1,220 @@
 """
-Phase 14 - Gemini API Integration & LLM Fallback
-HydroChat.md §2, §15, §16, §17
-
-This module provides Gemini API integration for intent classification and field extraction
-when regex-based approaches return UNKNOWN or fail to extract required fields.
+Phase 17: Gemini SDK Migration (V2)
+Migration from manual httpx calls to official google-genai SDK for accurate token tracking.
 """
 
-from __future__ import annotations
-import json
 import logging
 import time
-import asyncio
+import json
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 
-import httpx
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 
 from .enums import Intent
 
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+DEFAULT_MAX_INPUT_LENGTH = 1000  # Maximum input length to prevent token abuse
+
 
 @dataclass
-class GeminiUsageMetrics:
-    """Track Gemini API usage for cost monitoring per §29"""
+class GeminiUsageMetricsV2:
+    """Track Gemini API usage with accurate token counts from SDK"""
     successful_calls: int = 0
     failed_calls: int = 0
     total_tokens_used: int = 0
+    prompt_tokens_used: int = 0
+    completion_tokens_used: int = 0
     total_cost_usd: float = 0.0
     last_call_timestamp: Optional[float] = None
     
-    def add_call(self, success: bool, tokens: int = 0, cost: float = 0.0):
-        """Add a call to metrics tracking"""
+    def add_call(
+        self,
+        success: bool,
+        total_tokens: int = 0,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost: float = 0.0
+    ):
+        """Add a call to metrics tracking with accurate token counts"""
         if success:
             self.successful_calls += 1
         else:
             self.failed_calls += 1
-        self.total_tokens_used += tokens
+        
+        self.total_tokens_used += total_tokens
+        self.prompt_tokens_used += prompt_tokens
+        self.completion_tokens_used += completion_tokens
         self.total_cost_usd += cost
         self.last_call_timestamp = time.time()
 
 
 # Global metrics instance
-_gemini_metrics = GeminiUsageMetrics()
+_gemini_metrics_v2 = GeminiUsageMetricsV2()
 
 
-class GeminiAPIError(Exception):
-    """Custom exception for Gemini API errors"""
-    def __init__(self, message: str, status_code: Optional[int] = None, retry_after: Optional[float] = None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.retry_after = retry_after
-
-
-class GeminiClient:
+def calculate_cost(
+    prompt_tokens: int,
+    completion_tokens: int,
+    model: str = "gemini-2.0-flash-exp"
+) -> float:
     """
-    Client for Gemini API integration with exponential backoff and cost tracking.
-    Uses gemini-2.5-flash model as specified in §2 for speed optimization.
+    Calculate cost based on actual token usage.
+    
+    Gemini 2.0 Flash pricing (as of 2025):
+    - Input: $0.10 per 1M tokens
+    - Output: $0.30 per 1M tokens
+    
+    Args:
+        prompt_tokens: Number of input tokens
+        completion_tokens: Number of output tokens
+        model: Model name
+    
+    Returns:
+        Cost in USD
+    """
+    # Rates per 1M tokens
+    INPUT_RATE = 0.10
+    OUTPUT_RATE = 0.30
+    
+    input_cost = (prompt_tokens * INPUT_RATE) / 1_000_000
+    output_cost = (completion_tokens * OUTPUT_RATE) / 1_000_000
+    
+    return input_cost + output_cost
+
+
+class GeminiClientV2:
+    """
+    Official google-genai SDK client for accurate token tracking.
+    Replaces manual httpx implementation with SDK methods.
     """
     
-    def __init__(self):
-        self._api_key = None
-        self._model = None
-        self._timeout = None
-        self._max_retries = None
-        self._retry_delay = None
-        self._initialized = False
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.0-flash-exp"):
+        """
+        Initialize Gemini client with official SDK.
         
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+        Args:
+            api_key: Gemini API key (if None, loads from settings)
+            model: Model name to use
+        """
+        self._load_config(api_key, model)
+        self._initialize_client()
     
-    def _ensure_initialized(self):
-        """Lazy initialization of settings to avoid import-time Django configuration issues"""
-        if self._initialized:
-            return
-            
+    def _load_config(self, api_key: Optional[str], model: str):
+        """Load configuration from settings or parameters"""
+        if api_key:
+            self.api_key = api_key
+            self.model = model
+            self.max_input_length = DEFAULT_MAX_INPUT_LENGTH
+        else:
+            # Load from Django settings
+            try:
+                from django.conf import settings
+                self.api_key = getattr(settings, 'GEMINI_API_KEY', None)
+                self.model = getattr(settings, 'GEMINI_MODEL', 'gemini-2.0-flash-exp')
+                self.timeout = getattr(settings, 'LLM_REQUEST_TIMEOUT', 30.0)
+                self.max_retries = getattr(settings, 'LLM_MAX_RETRIES', 3)
+                self.max_input_length = getattr(settings, 'GEMINI_MAX_INPUT_LENGTH', DEFAULT_MAX_INPUT_LENGTH)
+            except:
+                self.api_key = None
+                self.model = model
+                self.timeout = 30.0
+                self.max_retries = 3
+                self.max_input_length = DEFAULT_MAX_INPUT_LENGTH
+    
+    def _initialize_client(self):
+        """Initialize the official genai client"""
+        if self.api_key:
+            self.genai_client = genai.Client(api_key=self.api_key)
+            logger.info(f"[GEMINI-SDK] ✅ Initialized client with model: {self.model}")
+        else:
+            self.genai_client = None
+            logger.warning("[GEMINI-SDK] ⚠️ No API key configured")
+    
+    async def count_tokens(self, text: str) -> int:
+        """
+        Count tokens using official SDK method.
+        
+        Args:
+            text: Text to count tokens for
+        
+        Returns:
+            Number of tokens (0 on error)
+        """
+        if not self.genai_client:
+            return 0
+        
         try:
-            from django.conf import settings
-            self._api_key = getattr(settings, 'GEMINI_API_KEY', None)
-            self._model = getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash')
-            self._timeout = getattr(settings, 'LLM_REQUEST_TIMEOUT', 30.0)
-            self._max_retries = getattr(settings, 'LLM_MAX_RETRIES', 3)
-            self._retry_delay = getattr(settings, 'LLM_RETRY_DELAY', 1.0)
+            response = await self.genai_client.aio.models.count_tokens(
+                model=self.model,
+                contents=text
+            )
             
-            if not self._api_key:
-                logger.warning("Gemini API key not configured. LLM fallback disabled.")
+            token_count = response.total_tokens
+            logger.debug(f"[GEMINI-SDK] Token count for text: {token_count}")
+            return token_count
             
-            self._initialized = True
         except Exception as e:
-            logger.warning(f"Could not initialize Gemini client: {e}")
-            self._api_key = None
-            self._initialized = True
+            logger.error(f"[GEMINI-SDK] ❌ Token counting error: {e}")
+            return 0
     
-    @property
-    def api_key(self):
-        self._ensure_initialized()
-        return self._api_key
-    
-    @api_key.setter
-    def api_key(self, value):
-        self._api_key = value
-    
-    @property 
-    def model(self):
-        self._ensure_initialized()
-        return self._model or 'gemini-2.5-flash'
-    
-    @model.setter
-    def model(self, value):
-        self._model = value
-    
-    @property
-    def timeout(self):
-        self._ensure_initialized()
-        return self._timeout or 30.0
-    
-    @timeout.setter  
-    def timeout(self, value):
-        self._timeout = value
-    
-    @property
-    def max_retries(self):
-        self._ensure_initialized()
-        return self._max_retries or 3
-    
-    @max_retries.setter
-    def max_retries(self, value):
-        self._max_retries = value
-    
-    @property
-    def retry_delay(self):
-        self._ensure_initialized()
-        return self._retry_delay or 1.0
-    
-    @retry_delay.setter
-    def retry_delay(self, value):
-        self._retry_delay = value
+    async def generate_content_with_tokens(
+        self,
+        prompt: str,
+        temperature: float = 0.1,
+        max_output_tokens: int = 200
+    ) -> Tuple[Any, int]:
+        """
+        Generate content and return response with token count.
+        
+        Args:
+            prompt: Prompt text
+            temperature: Generation temperature
+            max_output_tokens: Maximum tokens to generate
+        
+        Returns:
+            Tuple of (response, total_tokens)
+        """
+        if not self.genai_client:
+            raise APIError("Gemini client not initialized")
+        
+        try:
+            config = types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                top_p=0.8,
+                top_k=10
+            )
+            
+            response = await self.genai_client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config
+            )
+            
+            # Extract token count from usage metadata
+            total_tokens = 0
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                total_tokens = getattr(response.usage_metadata, 'total_token_count', 0)
+            
+            return response, total_tokens
+            
+        except Exception as e:
+            logger.error(f"[GEMINI-SDK] ❌ Content generation error: {e}")
+            raise
     
     def _sanitize_input(self, text: str) -> str:
-        """
-        Sanitize user input to prevent prompt injection per §17.
-        Remove potentially malicious patterns while preserving medical context.
-        """
+        """Sanitize user input to prevent prompt injection"""
         if not text:
             return ""
         
-        # Remove potential system prompt injection patterns
+        # Remove potential injection patterns
         sanitized = text.replace("\\n", " ").replace("\\t", " ")
         
-        # Remove common injection patterns
         injection_patterns = [
             "ignore previous instructions",
             "system:",
@@ -161,39 +228,37 @@ class GeminiClient:
         text_lower = sanitized.lower()
         for pattern in injection_patterns:
             if pattern in text_lower:
-                logger.warning(f"Potential prompt injection detected: {pattern}")
-                # Replace with safe equivalent
+                logger.warning(f"[GEMINI-SDK] ⚠️ Potential prompt injection detected: {pattern}")
                 sanitized = sanitized.replace(pattern, "[FILTERED]")
         
         # Limit length to prevent token abuse
-        if len(sanitized) > 1000:
-            sanitized = sanitized[:1000] + "..."
-            logger.info("Input truncated to prevent token abuse")
+        if len(sanitized) > self.max_input_length:
+            sanitized = sanitized[:self.max_input_length] + "..."
+            logger.info(f"[GEMINI-SDK] Input truncated to {self.max_input_length} chars to prevent token abuse")
         
         return sanitized.strip()
     
-    def _build_intent_classification_prompt(self, message: str, context: str = "", conversation_summary: str = "") -> str:
-        """
-        Build structured prompt for intent classification with examples per §15.
-        """
-        # Sanitize inputs
+    def _build_intent_classification_prompt(
+        self,
+        message: str,
+        context: str = "",
+        conversation_summary: str = ""
+    ) -> str:
+        """Build structured prompt for intent classification"""
         clean_message = self._sanitize_input(message)
         clean_context = self._sanitize_input(context)
         clean_summary = self._sanitize_input(conversation_summary)
         
-        # Build context section
         context_section = ""
         if clean_context:
             context_section = f"\\nRecent context: {clean_context}"
         if clean_summary:
             context_section += f"\\nConversation summary: {clean_summary}"
         
-        # Build intents list dynamically from enum
-        from .enums import Intent
-        intents_list = []
+        # Build intents list
         intent_descriptions = {
             Intent.CREATE_PATIENT: "Creating new patient records",
-            Intent.UPDATE_PATIENT: "Modifying existing patient information", 
+            Intent.UPDATE_PATIENT: "Modifying existing patient information",
             Intent.DELETE_PATIENT: "Removing patient records",
             Intent.LIST_PATIENTS: "Showing all patients",
             Intent.GET_PATIENT_DETAILS: "Getting specific patient information",
@@ -205,11 +270,10 @@ class GeminiClient:
             Intent.UNKNOWN: "Cannot determine intent or ambiguous"
         }
         
-        for i, intent in enumerate(Intent, 1):
-            description = intent_descriptions.get(intent, "Medical assistant intent")
-            intents_list.append(f"{i}. {intent.name} - {description}")
-        
-        intents_section = "\n".join(intents_list)
+        intents_section = "\n".join([
+            f"{i}. {intent.name} - {intent_descriptions.get(intent, 'Medical assistant intent')}"
+            for i, intent in enumerate(Intent, 1)
+        ])
         
         prompt = f"""You are a medical assistant for wound care management. Classify the user's intent from this message.
 
@@ -231,14 +295,111 @@ Respond with ONLY a JSON object in this exact format:
 
         return prompt
     
-    def _build_field_extraction_prompt(self, message: str, missing_fields: list[str]) -> str:
+    async def classify_intent_fallback(
+        self,
+        message: str,
+        context: str = "",
+        conversation_summary: str = ""
+    ) -> Intent:
         """
-        Build structured prompt for field extraction when regex patterns fail.
-        """
-        clean_message = self._sanitize_input(message)
-        fields_list = ", ".join(missing_fields)
+        Classify intent using official SDK with accurate token tracking.
         
-        prompt = f"""Extract medical patient information from this message.
+        Args:
+            message: User message
+            context: Recent context
+            conversation_summary: Conversation summary
+        
+        Returns:
+            Classified Intent enum value
+        """
+        if not self.genai_client:
+            logger.info("[GEMINI-SDK] Client not configured, returning UNKNOWN")
+            return Intent.UNKNOWN
+        
+        try:
+            prompt = self._build_intent_classification_prompt(message, context, conversation_summary)
+            response, total_tokens = await self.generate_content_with_tokens(prompt)
+            
+            # Extract token breakdown from usage_metadata
+            prompt_tokens = 0
+            completion_tokens = 0
+            
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+            
+            # Calculate cost
+            cost = calculate_cost(prompt_tokens, completion_tokens, self.model)
+            
+            # Parse response
+            text = response.text.strip()
+            
+            # Handle markdown formatting
+            if '```json' in text:
+                json_start = text.find('```json') + 7
+                json_end = text.find('```', json_start)
+                if json_end > json_start:
+                    text = text[json_start:json_end].strip()
+            elif '```' in text:
+                text = text.replace('```', '').strip()
+            
+            parsed = json.loads(text)
+            intent_str = parsed.get('intent', '').upper()
+            confidence = parsed.get('confidence', 0.0)
+            reason = parsed.get('reason', '')
+            
+            # Validate intent enum
+            try:
+                intent = Intent[intent_str]
+                logger.info(
+                    f"[GEMINI-SDK] ✅ Classified: {intent.name} "
+                    f"(confidence: {confidence}, tokens: {total_tokens}, cost: ${cost:.6f})"
+                )
+                
+                # Track metrics with ACTUAL tokens
+                _gemini_metrics_v2.add_call(
+                    success=True,
+                    total_tokens=total_tokens,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cost=cost
+                )
+                
+                return intent
+                
+            except KeyError:
+                logger.warning(f"[GEMINI-SDK] ⚠️ Invalid intent: {intent_str}")
+                _gemini_metrics_v2.add_call(success=False)
+                return Intent.UNKNOWN
+                
+        except Exception as e:
+            logger.error(f"[GEMINI-SDK] ❌ Intent classification error: {e}")
+            _gemini_metrics_v2.add_call(success=False)
+            return Intent.UNKNOWN
+    
+    async def extract_fields_fallback(
+        self,
+        message: str,
+        missing_fields: list[str]
+    ) -> Dict[str, Any]:
+        """
+        Extract fields using SDK with accurate token tracking.
+        
+        Args:
+            message: User message
+            missing_fields: Fields to extract
+        
+        Returns:
+            Dictionary of extracted fields
+        """
+        if not self.genai_client or not missing_fields:
+            return {}
+        
+        try:
+            clean_message = self._sanitize_input(message)
+            fields_list = ", ".join(missing_fields)
+            
+            prompt = f"""Extract medical patient information from this message.
 
 User message: "{clean_message}"
 
@@ -246,289 +407,104 @@ Extract these specific fields if present: {fields_list}
 
 Field formats:
 - first_name: Given name (e.g., "John")
-- last_name: Family name (e.g., "Doe") 
+- last_name: Family name (e.g., "Doe")
 - nric: Singapore NRIC (format: S1234567A)
 - contact_no: Phone number (8-15 digits, may include +)
 - date_of_birth: Date as YYYY-MM-DD
 - patient_id: Numeric ID when referencing existing patient
 - details: Additional medical details
 
-Examples:
-- "patient John Smith S1234567A contact 91234567" 
-  → {{"first_name": "John", "last_name": "Smith", "nric": "S1234567A", "contact_no": "91234567"}}
-- "update patient 123 with new contact number eight one two three four five six seven"
-  → {{"patient_id": 123, "contact_no": "81234567"}}
+Respond with ONLY a JSON object containing the extracted fields. Use null for missing fields."""
 
-Respond with ONLY a JSON object containing the extracted fields. Use null for missing fields.
-{{"first_name": null, "last_name": null, "nric": null, "contact_no": null, "date_of_birth": null, "patient_id": null, "details": null}}"""
-
-        return prompt
-    
-    async def _call_gemini_api(self, prompt: str) -> Dict[str, Any]:
-        """
-        Make API call to Gemini with exponential backoff retry logic per §17.
-        """
-        if not self.api_key:
-            raise GeminiAPIError("Gemini API key not configured")
-        
-        url = f"{self.base_url}/models/{self.model}:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
-        
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.1,  # Low temperature for consistent classification
-                "maxOutputTokens": 200,  # Limit output for cost control
-                "topP": 0.8,
-                "topK": 10
-            }
-        }
-        
-        last_error = None
-        retry_delay = self.retry_delay
-        
-        for attempt in range(self.max_retries + 1):
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(url, json=payload, headers=headers)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        return result
-                    
-                    elif response.status_code == 429:  # Rate limit
-                        retry_after = float(response.headers.get('retry-after', retry_delay))
-                        logger.warning(f"Rate limited, waiting {retry_after}s before retry {attempt + 1}")
-                        if attempt < self.max_retries:
-                            await self._async_sleep(retry_after)
-                            continue
-                        else:
-                            raise GeminiAPIError(
-                                f"Rate limited after {self.max_retries} retries",
-                                status_code=429,
-                                retry_after=retry_after
-                            )
-                    
-                    else:
-                        error_text = response.text
-                        logger.error(f"Gemini API error {response.status_code}: {error_text}")
-                        raise GeminiAPIError(
-                            f"API error {response.status_code}: {error_text}",
-                            status_code=response.status_code
-                        )
-                        
-            except GeminiAPIError:
-                # Re-raise GeminiAPIError without wrapping
-                raise
-                        
-            except httpx.TimeoutException as e:
-                last_error = GeminiAPIError(f"Request timeout: {e}")
-                logger.warning(f"Timeout on attempt {attempt + 1}: {e}")
+            response, total_tokens = await self.generate_content_with_tokens(prompt)
+            
+            # Track metrics
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                cost = calculate_cost(prompt_tokens, completion_tokens)
                 
-            except httpx.RequestError as e:
-                last_error = GeminiAPIError(f"Request error: {e}")
-                logger.warning(f"Request error on attempt {attempt + 1}: {e}")
-                
-            except asyncio.TimeoutError as e:
-                last_error = GeminiAPIError(f"Async timeout: {e}")
-                logger.warning(f"Async timeout on attempt {attempt + 1}: {e}")
+                _gemini_metrics_v2.add_call(
+                    success=True,
+                    total_tokens=total_tokens,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cost=cost
+                )
             
-            except Exception as e:
-                last_error = GeminiAPIError(f"Unexpected error: {e}")
-                logger.error(f"Unexpected error on attempt {attempt + 1}: {e}")
-            
-            # Exponential backoff for retries
-            if attempt < self.max_retries:
-                await self._async_sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-        
-        # All retries exhausted
-        _gemini_metrics.add_call(success=False)
-        raise last_error or GeminiAPIError("All retry attempts failed")
-    
-    async def _async_sleep(self, seconds: float):
-        """Async sleep helper"""
-        import asyncio
-        await asyncio.sleep(seconds)
-    
-    def _extract_json_response(self, api_response: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract and parse JSON from Gemini API response with validation.
-        """
-        try:
-            candidates = api_response.get('candidates', [])
-            if not candidates:
-                raise ValueError("No candidates in API response")
-            
-            content = candidates[0].get('content', {})
-            parts = content.get('parts', [])
-            if not parts:
-                raise ValueError("No content parts in API response")
-            
-            text = parts[0].get('text', '').strip()
-            if not text:
-                raise ValueError("Empty response text")
-            
-            # Extract JSON from response (handle potential markdown formatting)
+            # Parse response
+            text = response.text.strip()
             if '```json' in text:
                 json_start = text.find('```json') + 7
                 json_end = text.find('```', json_start)
                 if json_end > json_start:
                     text = text[json_start:json_end].strip()
-            elif '```' in text:
-                # Remove any code block markers
-                text = text.replace('```', '').strip()
             
-            # Handle escaped newlines and common LLM response patterns
-            text = text.replace('\\n', '\n').replace('\\t', '\t').strip()
-            if text.startswith('json'):
-                text = text[4:].strip()
-            
-            # Parse JSON
             parsed = json.loads(text)
-            return parsed
             
-        except (KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse Gemini response: {e}. Response: {api_response}")
-            raise GeminiAPIError(f"Invalid response format: {e}")
-    
-    async def classify_intent_fallback(self, message: str, context: str = "", conversation_summary: str = "") -> Intent:
-        """
-        Fallback intent classification using Gemini API per §15.
-        Returns UNKNOWN if API fails or response is invalid.
-        """
-        if not self.api_key:
-            logger.info("Gemini API key not configured, returning UNKNOWN")
-            return Intent.UNKNOWN
-
-        try:
-            prompt = self._build_intent_classification_prompt(message, context, conversation_summary)
-            api_response = await self._call_gemini_api(prompt)
-            parsed = self._extract_json_response(api_response)
-            
-            # Validate response schema
-            intent_str = parsed.get('intent', '').upper()
-            confidence = parsed.get('confidence', 0.0)
-            reason = parsed.get('reason', '')
-            
-            # Validate intent is in enum
-            try:
-                intent = Intent[intent_str]
-                logger.info(f"Gemini classified intent: {intent} (confidence: {confidence}, reason: {reason})")
-                _gemini_metrics.add_call(success=True, tokens=100, cost=0.001)  # Estimate moved here
-                return intent
-                
-            except KeyError:
-                logger.warning(f"Gemini returned invalid intent: {intent_str}")
-                _gemini_metrics.add_call(success=False)
-                return Intent.UNKNOWN
-                
-        except GeminiAPIError as e:
-            logger.error(f"Gemini API error during intent classification: {e}")
-            _gemini_metrics.add_call(success=False)
-            return Intent.UNKNOWN
-        
-        except Exception as e:
-            logger.error(f"Unexpected error in Gemini intent classification: {e}")
-            _gemini_metrics.add_call(success=False)
-            return Intent.UNKNOWN
-    
-    async def extract_fields_fallback(self, message: str, missing_fields: list[str]) -> Dict[str, Any]:
-        """
-        Fallback field extraction using Gemini API when regex patterns fail.
-        Returns empty dict if API fails.
-        """
-        if not self.api_key or not missing_fields:
-            return {}
-
-        try:
-            prompt = self._build_field_extraction_prompt(message, missing_fields)
-            api_response = await self._call_gemini_api(prompt)
-            # Track successful metrics
-            _gemini_metrics.add_call(True, len(prompt), 0.0)
-            parsed = self._extract_json_response(api_response)
-            
-            # Filter to only requested fields and remove null values
+            # Filter to requested fields
             extracted = {}
             for field in missing_fields:
                 value = parsed.get(field)
                 if value is not None and str(value).strip():
                     extracted[field] = value
             
-            logger.info(f"Gemini extracted fields: {extracted}")
+            logger.info(f"[GEMINI-SDK] ✅ Extracted fields: {extracted}")
             return extracted
             
-        except GeminiAPIError as e:
-            logger.error(f"Gemini API error during field extraction: {e}")
-            return {}
-        
         except Exception as e:
-            logger.error(f"Unexpected error in Gemini field extraction: {e}")
+            logger.error(f"[GEMINI-SDK] ❌ Field extraction error: {e}")
             return {}
-    
-    def get_usage_metrics(self) -> Dict[str, Any]:
-        """Get current usage metrics for monitoring per §29"""
-        return asdict(_gemini_metrics)
-    
-    def reset_metrics(self):
-        """Reset usage metrics (for testing)"""
-        global _gemini_metrics
-        _gemini_metrics = GeminiUsageMetrics()
-    
-    def reset_for_testing(self):
-        """Reset client state for testing"""
-        self._initialized = False
-        self._api_key = None
-        self._model = None
 
 
 # Global client instance
-_gemini_client = GeminiClient()
+_gemini_client_v2 = GeminiClientV2()
 
 
-# Public API functions matching intent_classifier.py interface
-async def classify_intent_fallback(message: str, context: str = "", conversation_summary: str = "") -> Intent:
-    """
-    Public API for Gemini-based intent classification fallback per §15.
-    Used when regex-based classification returns UNKNOWN.
-    """
-    return await _gemini_client.classify_intent_fallback(message, context, conversation_summary)
+# Public API functions
+async def classify_intent_fallback_v2(
+    message: str,
+    context: str = "",
+    conversation_summary: str = ""
+) -> Intent:
+    """Public API for intent classification with SDK"""
+    return await _gemini_client_v2.classify_intent_fallback(message, context, conversation_summary)
 
 
-async def extract_fields_fallback(message: str, missing_fields: list[str]) -> Dict[str, Any]:
-    """
-    Public API for Gemini-based field extraction fallback.
-    Used when regex patterns fail to extract required fields.
-    """
-    return await _gemini_client.extract_fields_fallback(message, missing_fields)
+async def extract_fields_fallback_v2(
+    message: str,
+    missing_fields: list[str]
+) -> Dict[str, Any]:
+    """Public API for field extraction with SDK"""
+    return await _gemini_client_v2.extract_fields_fallback(message, missing_fields)
 
 
-def get_gemini_metrics() -> Dict[str, Any]:
-    """Get Gemini API usage metrics for cost monitoring per §29"""
-    return _gemini_client.get_usage_metrics()
+def get_gemini_metrics_v2() -> Dict[str, Any]:
+    """Get metrics with accurate token counts"""
+    return asdict(_gemini_metrics_v2)
 
 
-def reset_gemini_metrics():
-    """Reset Gemini metrics (for testing)"""
-    _gemini_client.reset_metrics()
+def reset_gemini_metrics_v2():
+    """Reset metrics (for testing)"""
+    global _gemini_metrics_v2
+    _gemini_metrics_v2 = GeminiUsageMetricsV2()
 
 
-def reset_gemini_client():
+def reset_gemini_client_v2():
     """Reset Gemini client state (for testing)"""
-    _gemini_client.reset_for_testing()
+    global _gemini_client_v2
+    _gemini_client_v2 = GeminiClientV2()
+    reset_gemini_metrics_v2()
 
 
 __all__ = [
-    'classify_intent_fallback',
-    'extract_fields_fallback', 
-    'get_gemini_metrics',
-    'reset_gemini_metrics',
-    'reset_gemini_client',
-    'GeminiAPIError',
-    'GeminiUsageMetrics'
+    'GeminiClientV2',
+    'classify_intent_fallback_v2',
+    'extract_fields_fallback_v2',
+    'get_gemini_metrics_v2',
+    'reset_gemini_metrics_v2',
+    'reset_gemini_client_v2',
+    'calculate_cost'
 ]
+
+

@@ -25,11 +25,18 @@ class HydroChatService {
       console.log(`[HydroChatService] Message: "${message}"`);
       console.log(`[HydroChatService] Message ID: ${messageId || 'none'}`);
       
-      const response = await api.post('/hydrochat/converse/', {
+      // Build request payload - only include message_id if provided (non-null)
+      const payload = {
         conversation_id: conversationId,
         message: message.trim(),
-        message_id: messageId, // Include for backend idempotency tracking
-      });
+      };
+      
+      // Only include message_id if explicitly provided (for future backend idempotency support)
+      if (messageId !== null && messageId !== undefined) {
+        payload.message_id = messageId;
+      }
+      
+      const response = await api.post('/hydrochat/converse/', payload);
       
       console.log(`[HydroChatService] Received response from HydroChat API`);
       console.log(`[HydroChatService] New conversation ID: ${response.data.conversation_id}`);

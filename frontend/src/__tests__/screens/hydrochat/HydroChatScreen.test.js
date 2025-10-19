@@ -1,18 +1,14 @@
 import React from 'react';
 import { render, fireEvent, waitFor, screen } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { resetMockServiceState } from '../../__setup__/mockServices';
 import HydroChatScreen from '../../../screens/hydrochat/HydroChatScreen';
 
-// Mock the hydro chat service
+// Mock the hydro chat service - inline required by Jest
 jest.mock('../../../services/hydroChatService', () => ({
   hydroChatService: {
     sendMessage: jest.fn(),
-    canRetryMessage: jest.fn(() => ({
-      canRetry: false,
-      attemptsRemaining: 0,
-      totalAttempts: 0,
-      maxAttempts: 3
-    })),
+    canRetryMessage: jest.fn(),
     clearRetryData: jest.fn(),
   },
 }));
@@ -40,12 +36,10 @@ const { hydroChatService } = require('../../../services/hydroChatService');
 
 describe('HydroChatScreen', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    hydroChatService.sendMessage.mockClear();
-    hydroChatService.canRetryMessage.mockClear();
-    hydroChatService.clearRetryData.mockClear();
+    // Reset mock state using shared utility
+    resetMockServiceState(hydroChatService);
     
-    // Reset default mock implementation
+    // Setup default mock: no retry capability (tests can override)
     hydroChatService.canRetryMessage.mockReturnValue({
       canRetry: false,
       attemptsRemaining: 0,

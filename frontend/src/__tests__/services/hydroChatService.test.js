@@ -29,8 +29,7 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: 'test-uuid',
-        message: 'Hello',
-        message_id: null
+        message: 'Hello'
       });
 
       expect(result).toEqual(mockResponse.data);
@@ -52,8 +51,7 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: null,
-        message: 'Start chat',
-        message_id: null
+        message: 'Start chat'
       });
 
       expect(result).toEqual(mockResponse.data);
@@ -75,8 +73,28 @@ describe('HydroChatService', () => {
 
       expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
         conversation_id: 'test-uuid',
-        message: 'Hello world',
-        message_id: null
+        message: 'Hello world'
+      });
+    });
+
+    it('should include message_id when explicitly provided', async () => {
+      const mockResponse = {
+        data: {
+          conversation_id: 'test-uuid',
+          messages: [{ role: 'assistant', content: 'Retry received!' }],
+          agent_op: 'NONE',
+          agent_state: { intent: 'UNKNOWN' }
+        }
+      };
+
+      api.post.mockResolvedValue(mockResponse);
+
+      await hydroChatService.sendMessage('test-uuid', 'Hello', 'msg-123');
+
+      expect(api.post).toHaveBeenCalledWith('/hydrochat/converse/', {
+        conversation_id: 'test-uuid',
+        message: 'Hello',
+        message_id: 'msg-123'
       });
     });
 

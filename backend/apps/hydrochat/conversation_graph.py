@@ -1593,9 +1593,9 @@ Please let me know how I can assist you with patient management."""
             }
         
         try:
-            # Import Gemini client for summarization
+            # Import Gemini client for summarization (official SDK with accurate token tracking)
             import json
-            from .gemini_client import GeminiClient
+            from .gemini_client import GeminiClientV2 as GeminiClient
             
             # Initialize client
             gemini_client = GeminiClient()

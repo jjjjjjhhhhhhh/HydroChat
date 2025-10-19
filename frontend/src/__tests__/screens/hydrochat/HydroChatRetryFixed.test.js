@@ -6,15 +6,15 @@
 import React from 'react';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { resetMockServiceState } from '../../__setup__/mockServices';
 
-// Mock the hydro chat service using the correct import path
+// Mock the hydro chat service - inline required by Jest
 jest.mock('../../../services/hydroChatService', () => ({
   hydroChatService: {
     maxRetryAttempts: 3,
     retryDelayBase: 1000,
     messageAttempts: new Map(),
     messagesToRetry: new Map(),
-    
     sendMessage: jest.fn(),
     retryMessage: jest.fn(),
     canRetryMessage: jest.fn(),
@@ -53,13 +53,8 @@ jest.spyOn(Alert, 'alert');
 
 describe('Phase 16 Frontend Message Retry Tests (Fixed)', () => {
   beforeEach(() => {
-    // Clear all mocks
-    jest.clearAllMocks();
-    hydroChatService.sendMessage.mockClear();
-    hydroChatService.retryMessage.mockClear();
-    hydroChatService.canRetryMessage.mockClear();
-    hydroChatService.clearRetryData.mockClear();
-    hydroChatService.clearAllRetryData.mockClear();
+    // Reset mock state using shared utility
+    resetMockServiceState(hydroChatService);
     
     // Suppress console errors for cleaner test output
     jest.spyOn(console, 'error').mockImplementation(() => {});

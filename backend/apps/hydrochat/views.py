@@ -402,7 +402,7 @@ class MetricsExportAPIView(APIView):
             
             # Import metrics modules
             from .performance import get_performance_summary
-            from .gemini_client_v2 import get_gemini_metrics_v2
+            from .gemini_client import get_gemini_metrics_v2
             from .metrics_store import get_global_metrics_store
             from .agent_stats import agent_stats
             

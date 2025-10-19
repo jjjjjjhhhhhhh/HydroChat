@@ -40,7 +40,7 @@ class RedisConfig:
             'host': os.getenv('REDIS_HOST', 'localhost'),
             'port': int(os.getenv('REDIS_PORT', '6379')),
             'db': int(os.getenv('REDIS_DB', '0')),
-            'password': os.getenv('REDIS_PASSWORD', None) or None,
+            'password': os.getenv('REDIS_PASSWORD', None),
             'max_connections': int(os.getenv('REDIS_MAX_CONNECTIONS', '50')),
             'socket_timeout': int(os.getenv('REDIS_SOCKET_TIMEOUT', '5')),
             'socket_connect_timeout': int(os.getenv('REDIS_SOCKET_TIMEOUT', '5')),

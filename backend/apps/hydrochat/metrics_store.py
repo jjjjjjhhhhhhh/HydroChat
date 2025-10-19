@@ -35,9 +35,9 @@ class MetricsStore:
             cleanup_interval_minutes: Minimum minutes between cleanup runs
         """
         if max_entries <= 0:
-            raise ValueError("max_entries must be positive")
+            raise ValueError(f"max_entries must be positive, got: {max_entries}")
         if ttl_hours <= 0:
-            raise ValueError("ttl_hours must be positive")
+            raise ValueError(f"ttl_hours must be positive, got: {ttl_hours}")
         
         self.max_entries = max_entries
         self.ttl_hours = ttl_hours

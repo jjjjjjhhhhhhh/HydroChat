@@ -8,7 +8,7 @@ import json
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from datetime import datetime
 
-from apps.hydrochat.gemini_client_v2 import (
+from apps.hydrochat.gemini_client import (
     GeminiClientV2,
     classify_intent_fallback_v2,
     extract_fields_fallback_v2,
@@ -23,7 +23,7 @@ class TestGeminiSDKClientInitialization:
     
     def test_client_initialization_with_api_key(self):
         """Test that client initializes correctly with API key."""
-        with patch('apps.hydrochat.gemini_client_v2.genai.Client') as mock_client_class:
+        with patch('apps.hydrochat.gemini_client.genai.Client') as mock_client_class:
             mock_instance = Mock()
             mock_client_class.return_value = mock_instance
             
@@ -129,7 +129,7 @@ class TestIntentClassificationWithSDK:
         """Test that cost is calculated from actual token usage."""
         reset_gemini_metrics_v2()
         
-        with patch('apps.hydrochat.gemini_client_v2.genai.Client') as mock_client_class:
+        with patch('apps.hydrochat.gemini_client.genai.Client') as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
             
@@ -266,7 +266,7 @@ class TestCostCalculationAccuracy:
     
     def test_cost_calculation_gemini_flash(self):
         """Test cost calculation for Gemini 2.0 Flash model."""
-        from apps.hydrochat.gemini_client_v2 import calculate_cost
+        from apps.hydrochat.gemini_client import calculate_cost
         
         # Gemini 2.0 Flash rates (as of 2025):
         # Input: $0.10 per 1M tokens
@@ -284,7 +284,7 @@ class TestCostCalculationAccuracy:
     
     def test_cost_calculation_high_volume(self):
         """Test cost calculation with high token volumes."""
-        from apps.hydrochat.gemini_client_v2 import calculate_cost
+        from apps.hydrochat.gemini_client import calculate_cost
         
         # Simulate 1M tokens
         input_tokens = 750_000
@@ -331,7 +331,7 @@ class TestPhase17SDKMigrationExitCriteria:
     async def test_ec_real_cost_calculations(self):
         """EC: LLM API metrics track with real cost calculations based on actual token usage."""
         # Test the cost calculation function directly
-        from apps.hydrochat.gemini_client_v2 import calculate_cost
+        from apps.hydrochat.gemini_client import calculate_cost
         
         # Test with realistic token counts
         prompt_tokens = 400

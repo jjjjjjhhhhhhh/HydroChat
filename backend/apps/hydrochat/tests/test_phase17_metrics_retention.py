@@ -35,11 +35,11 @@ class TestMetricsStoreInitialization:
         assert store.ttl_hours == 12
     
     def test_metrics_store_validates_settings(self):
-        """Test that invalid settings raise errors."""
-        with pytest.raises(ValueError):
+        """Test that invalid settings raise errors with descriptive messages."""
+        with pytest.raises(ValueError, match="max_entries must be positive, got: -1"):
             MetricsStore(max_entries=-1)
         
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="ttl_hours must be positive, got: 0"):
             MetricsStore(ttl_hours=0)
 
 

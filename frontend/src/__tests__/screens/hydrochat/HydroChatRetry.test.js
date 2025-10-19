@@ -6,33 +6,29 @@
 import React from 'react';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { setupHydroChatServiceMocks, resetMockServiceState } from '../../__setup__/mockServices';
 
-// Mock the services module
-jest.mock('../../../services', () => {
-  const mockService = {
+// Mock the services module - inline required by Jest
+jest.mock('../../../services', () => ({
+  hydroChatService: {
     maxRetryAttempts: 3,
     retryDelayBase: 1000,
     messageAttempts: new Map(),
     messagesToRetry: new Map(),
-    
     sendMessage: jest.fn(),
     retryMessage: jest.fn(),
     canRetryMessage: jest.fn(),
     clearRetryData: jest.fn(),
     clearAllRetryData: jest.fn(),
     getStats: jest.fn(),
-  };
-  
-  return {
-    hydroChatService: mockService,
-    sendHydroChatMessage: jest.fn(),
-    getHydroChatStats: jest.fn(),
-    api: { get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() },
-    authService: { login: jest.fn(), logout: jest.fn() },
-    patientService: { getPatients: jest.fn() },
-    scanService: { getAllScans: jest.fn() },
-  };
-});
+  },
+  sendHydroChatMessage: jest.fn(),
+  getHydroChatStats: jest.fn(),
+  api: { get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() },
+  authService: { login: jest.fn(), logout: jest.fn() },
+  patientService: { getPatients: jest.fn() },
+  scanService: { getAllScans: jest.fn() },
+}));
 
 // Import after mocking - get the mocked service
 import HydroChatScreen from '../../../screens/hydrochat/HydroChatScreen';
@@ -54,71 +50,17 @@ let mockAlertFn;
 
 describe('Phase 16 Frontend Message Retry Tests', () => {
   beforeEach(() => {
-    // Clear all mocks
-    jest.clearAllMocks();
+    // Reset mock state using shared utility
+    resetMockServiceState(mockHydroChatService);
     
-    // Reset Maps
-    if (mockHydroChatService.messageAttempts instanceof Map) {
-      mockHydroChatService.messageAttempts.clear();
-    }
-    if (mockHydroChatService.messagesToRetry instanceof Map) {
-      mockHydroChatService.messagesToRetry.clear();
-    }
+    // Setup default mock implementations using shared utility
+    setupHydroChatServiceMocks(mockHydroChatService);
     
     // Setup Alert spy
     mockAlertFn = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     
     // Setup console spy
     consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    
-    // Setup default canRetryMessage implementation
-    mockHydroChatService.canRetryMessage.mockImplementation((messageId) => {
-      const hasRetryData = mockHydroChatService.messagesToRetry.has(messageId);
-      const attempts = mockHydroChatService.messageAttempts.get(messageId) || 0;
-      return {
-        canRetry: hasRetryData && attempts < mockHydroChatService.maxRetryAttempts,
-        attemptsRemaining: Math.max(0, mockHydroChatService.maxRetryAttempts - attempts),
-        totalAttempts: attempts,
-        maxAttempts: mockHydroChatService.maxRetryAttempts,
-        messageId
-      };
-    });
-    
-    // Setup clearRetryData implementation
-    mockHydroChatService.clearRetryData.mockImplementation((messageId) => {
-      mockHydroChatService.messageAttempts.delete(messageId);
-      mockHydroChatService.messagesToRetry.delete(messageId);
-    });
-    
-    // Setup clearAllRetryData implementation
-    mockHydroChatService.clearAllRetryData.mockImplementation(() => {
-      mockHydroChatService.messageAttempts.clear();
-      mockHydroChatService.messagesToRetry.clear();
-    });
-    
-    // Mock retryMessage to properly track attempts
-    mockHydroChatService.retryMessage.mockImplementation(async (messageId) => {
-      const currentAttempts = mockHydroChatService.messageAttempts.get(messageId) || 0;
-      mockHydroChatService.messageAttempts.set(messageId, currentAttempts + 1);
-      
-      // Don't clear data automatically - let test control it
-      return {
-        success: false,
-        error: 'Retry failed',
-        messageId: messageId,
-        attempt: currentAttempts + 1
-      };
-    });
-    
-    // Mock sendMessage - default to success, tests can override
-    mockHydroChatService.sendMessage.mockImplementation(async (conversationId, message, messageId) => {
-      // Default successful response
-      return {
-        conversation_id: conversationId || 'conv-test',
-        agent_op: 'SUCCESS',
-        messages: [{ role: 'assistant', content: 'Success' }]
-      };
-    });
   });
 
   afterEach(() => {

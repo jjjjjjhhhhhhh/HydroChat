@@ -155,7 +155,7 @@ async def llm_classify_intent_fallback(text: str, context: str = "", conversatio
         Intent enum value or UNKNOWN if classification fails
     """
     try:
-        from .gemini_client import classify_intent_fallback
+        from .gemini_client import classify_intent_fallback_v2 as classify_intent_fallback
         return await classify_intent_fallback(text, context, conversation_summary)
     except ImportError:
         # Fallback if Gemini client not available
@@ -174,7 +174,7 @@ async def llm_extract_fields_fallback(text: str, missing_fields: list[str]) -> D
         Dict with extracted fields, empty if extraction fails
     """
     try:
-        from .gemini_client import extract_fields_fallback
+        from .gemini_client import extract_fields_fallback_v2 as extract_fields_fallback
         return await extract_fields_fallback(text, missing_fields)
     except ImportError:
         # Fallback if Gemini client not available
