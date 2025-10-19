@@ -1,5 +1,8 @@
 import '@testing-library/jest-native/extend-expect';
 
+// Set React to development mode for testing
+global.__DEV__ = true;
+
 // Mock React Native modules
 jest.mock('react-native/Libraries/EventEmitter/NativeEventEmitter');
 

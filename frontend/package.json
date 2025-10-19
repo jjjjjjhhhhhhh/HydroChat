@@ -61,7 +61,10 @@
       "src/**/*.{js,jsx,ts,tsx}",
       "!src/**/*.d.ts",
       "!src/__tests__/**"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^@env$": "<rootDir>/src/__mocks__/@env.js"
+    }
   },
   "private": true
 }
