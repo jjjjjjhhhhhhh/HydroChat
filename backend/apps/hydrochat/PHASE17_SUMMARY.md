@@ -21,10 +21,11 @@
 - **Module**: `backend/apps/hydrochat/performance.py`
 - **Features**:
   - `@track_response_time` decorator with 2s threshold (per §2)
+  - Supports both synchronous and asynchronous functions
   - Automatic warnings for slow operations
   - Response time tracking with timestamp capture
   - Summary statistics (avg, max, min, violation rate)
-- **Tests**: 17/17 passing ✅
+- **Tests**: 21/21 passing ✅
 
 ### 3. ✅ Metrics Retention Policy
 - **Module**: `backend/apps/hydrochat/metrics_store.py`
@@ -73,10 +74,10 @@
 
 | Test Suite | Passed | Total | Pass Rate |
 |------------|--------|-------|-----------|
-| Performance Tests | 17 | 17 | **100%** ✅ |
+| Performance Tests | 21 | 21 | **100%** ✅ |
 | Metrics Retention Tests | 27 | 27 | **100%** ✅ |
-| SDK Migration Tests | 15 | 20 | **75%** ⚠️ |
-| **Overall** | **59** | **64** | **92%** ✅ |
+| SDK Migration Tests | 20 | 20 | **100%** ✅ |
+| **Overall** | **68** | **68** | **100%** ✅ |
 
 ### Test Coverage Highlights
 - ✅ Response time tracking with threshold enforcement (<2s)
@@ -86,11 +87,7 @@
 - ✅ Alert thresholds (>20% error rate, >5 retries)
 - ✅ JSON export endpoint structure
 - ✅ Developer-only access control
-
-### Known Test Issues
-- 5 SDK migration tests have async mocking complexity (non-blocking)
-- Core functionality verified through integration tests
-- All exit criteria validated
+- ✅ Async decorator support for both sync and async functions
 
 ---
 
@@ -104,7 +101,7 @@
 5. **`backend/apps/hydrochat/urls.py`** - Added `/metrics/export/` route
 
 ### Test Suites
-1. **`backend/apps/hydrochat/tests/test_phase17_performance.py`** - 17 tests for response time tracking
+1. **`backend/apps/hydrochat/tests/test_phase17_performance.py`** - 21 tests for response time tracking (includes async decorator tests)
 2. **`backend/apps/hydrochat/tests/test_phase17_metrics_retention.py`** - 27 tests for retention policy
 3. **`backend/apps/hydrochat/tests/test_phase17_sdk_migration.py`** - 20 tests for SDK migration
 
@@ -251,11 +248,11 @@ print(f"Total Cost: ${metrics['total_cost_usd']:.4f}")
 | Performance benchmark <2s | ✅ Pass | Decorator tracks and warns |
 | Accurate token counts from SDK | ✅ Pass | Uses `response.usage_metadata` |
 | Real cost calculations | ✅ Pass | Based on actual token usage |
-| Response time decorator | ✅ Pass | All 17 tests pass |
+| Response time decorator | ✅ Pass | All 21 tests pass (sync + async) |
 | JSON export endpoint | ✅ Pass | Developer-only access enforced |
 | Alert thresholds (>20% error) | ✅ Pass | Warnings triggered correctly |
 | Metrics retention policy | ✅ Pass | 1000 entries, 24h TTL enforced |
-| SDK migration validation | ⚠️ Partial | 15/20 tests pass (core verified) |
+| SDK migration validation | ✅ Pass | All 20 tests pass |
 
 ---
 
@@ -306,7 +303,7 @@ def process_conversation(state):
 
 - **Specification**: `phase_2.md` Phase 17
 - **Original Spec**: `HydroChat.md` §29, §22
-- **Test Coverage**: 92% (59/64 tests passing)
+- **Test Coverage**: 100% (68/68 tests passing)
 - **Dependencies**: `google-genai>=1.41.0` (already in requirements.txt)
 
 ---

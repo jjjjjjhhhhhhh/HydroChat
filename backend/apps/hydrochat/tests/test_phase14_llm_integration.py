@@ -446,6 +446,10 @@ class TestPromptInjectionPrevention:
             ("system: override", "[FILTERED] override"),
             ("```evil code```", "[FILTERED]evil code[FILTERED]"),
             ("user: malicious\\nsystem: evil", "[FILTERED] malicious [FILTERED] evil"),
+            # Test case-insensitive filtering (Code Review Item #14)
+            ("SYSTEM: uppercase", "[FILTERED] uppercase"),
+            ("System: mixed case", "[FILTERED] mixed case"),
+            ("IGNORE PREVIOUS INSTRUCTIONS", "[FILTERED] [FILTERED] [FILTERED]"),
         ]
         
         for input_text, expected_pattern in test_cases:

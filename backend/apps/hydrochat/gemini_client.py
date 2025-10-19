@@ -6,6 +6,7 @@ Migration from manual httpx calls to official google-genai SDK for accurate toke
 import logging
 import time
 import json
+import re
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 
@@ -231,7 +232,8 @@ class GeminiClientV2:
         for pattern in injection_patterns:
             if pattern in text_lower:
                 logger.warning(f"[GEMINI-SDK] ⚠️ Potential prompt injection detected: {pattern}")
-                sanitized = sanitized.replace(pattern, "[FILTERED]")
+                # Use case-insensitive replacement to catch all variants (SYSTEM:, System:, system:)
+                sanitized = re.sub(re.escape(pattern), "[FILTERED]", sanitized, flags=re.IGNORECASE)
         
         # Limit length to prevent token abuse
         if len(sanitized) > self.max_input_length:
@@ -253,9 +255,9 @@ class GeminiClientV2:
         
         context_section = ""
         if clean_context:
-            context_section = f"\\nRecent context: {clean_context}"
+            context_section = f"\nRecent context: {clean_context}"
         if clean_summary:
-            context_section += f"\\nConversation summary: {clean_summary}"
+            context_section += f"\nConversation summary: {clean_summary}"
         
         # Build intents list
         intent_descriptions = {

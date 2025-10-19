@@ -1943,6 +1943,10 @@ class ConversationGraph:
         # Determine Redis usage (Phase 18)
         self.use_redis = use_redis if use_redis is not None else RedisConfig.is_enabled()
         
+        # Cache checkpointing availability at initialization (Code Review Item #15)
+        # Avoids redundant health_check() calls on every message invocation
+        self._checkpointing_enabled = False
+        
         # Build the graph with appropriate checkpointer
         self.graph = self._build_graph()
         
@@ -2182,16 +2186,21 @@ class ConversationGraph:
         
         Note: Checkpointing is only used when Redis is explicitly enabled
         to avoid serialization issues with ConversationState.
+        
+        Code Review Item #15: Caches the checkpointing decision in self._checkpointing_enabled
+        to avoid redundant health checks on every message invocation.
         """
         if not self.use_redis:
             logger.info("[GRAPH] 📝 Using stateless mode (no checkpointing)")
+            self._checkpointing_enabled = False
             return None
         
-        # Check Redis health
+        # Check Redis health once at initialization
         if not RedisConfig.health_check():
             logger.warning(
                 "[GRAPH] ⚠️ Redis unavailable, using stateless mode"
             )
+            self._checkpointing_enabled = False
             return None
         
         # Phase 18: Redis checkpointing temporarily disabled
@@ -2200,6 +2209,7 @@ class ConversationGraph:
         logger.warning(
             "[GRAPH] ⚠️ Redis checkpointing not yet fully implemented, using stateless mode"
         )
+        self._checkpointing_enabled = False
         return None
 
     def _route_from_ingest_message(self, state: GraphState) -> str:
@@ -2258,8 +2268,9 @@ class ConversationGraph:
         }
         
         try:
-            # Phase 18: Pass config only if using Redis checkpointer
-            if self.use_redis and RedisConfig.health_check():
+            # Phase 18: Pass config only if checkpointing is enabled
+            # Code Review Item #15: Use cached flag to avoid redundant health_check() on hot path
+            if self._checkpointing_enabled:
                 # Use id() to get unique identifier for this conversation state instance
                 thread_id = str(id(conversation_state))
                 config = {

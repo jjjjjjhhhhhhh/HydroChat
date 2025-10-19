@@ -21,7 +21,6 @@ from typing import Optional
 
 import redis
 from redis import ConnectionPool, Redis
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
